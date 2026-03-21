@@ -8,11 +8,12 @@ import NotFound from "./pages/notfound";
 import Signup from "./pages/Signup";
 import Login from "./pages/Login";
 import { useState, useEffect, useCallback } from "react";
+import { connectWallet, shortAddress } from "./hooks/useBlockchain";
 import "./App.css";
 
-const API = "http://localhost:5000/api";
+const API = process.env.REACT_APP_API_URL || "http://localhost:5000/api";
 
-const COLORS = {
+export const COLORS = {
   bg: "#0a0f1e",
   card: "#0f1729",
   cardBorder: "#1a2540",
@@ -25,7 +26,7 @@ const COLORS = {
   muted: "#64748b",
 };
 
-async function apiFetch(path, options = {}) {
+export async function apiFetch(path, options = {}) {
   const res = await fetch(`${API}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
@@ -36,7 +37,7 @@ async function apiFetch(path, options = {}) {
 }
 
 // ─── TopBar ───────────────────────────────────────────────────────────────────
-function TopBar({ activeTab, setActiveTab, walletConnected, setWalletConnected, setWalletAddress }) {
+function TopBar({ activeTab, setActiveTab, walletConnected, setWalletConnected, walletAddress, setWalletAddress }) {
   const tabs = ["Dashboard", "Book Appointment", "My Records", "Doctors", "Emergency"];
 
   const handleWallet = async () => {
@@ -45,18 +46,39 @@ function TopBar({ activeTab, setActiveTab, walletConnected, setWalletConnected, 
       setWalletAddress("");
       return;
     }
-    const mockAddress = "0x72A9...1B";
     try {
-      const data = await apiFetch("/wallet/connect", {
-        method: "POST",
-        body: JSON.stringify({ walletAddress: mockAddress }),
-      });
+      // ── REAL MetaMask connect ──────────────────────────────────────────────
+      const address = await connectWallet();
+      // Notify backend about the connected wallet
+      try {
+        await apiFetch("/wallet/connect", {
+          method: "POST",
+          body: JSON.stringify({ walletAddress: address }),
+        });
+      } catch (_) {
+        // backend call is optional — don't block UI if it fails
+      }
       setWalletConnected(true);
-      setWalletAddress(data.walletAddress);
+      setWalletAddress(address);
     } catch (err) {
-      console.error("Wallet connect failed:", err.message);
+      alert(err.message);
     }
   };
+
+  // Listen for MetaMask account changes
+  useEffect(() => {
+    if (!window.ethereum) return;
+    const handleAccountsChanged = (accounts) => {
+      if (accounts.length === 0) {
+        setWalletConnected(false);
+        setWalletAddress("");
+      } else {
+        setWalletAddress(accounts[0]);
+      }
+    };
+    window.ethereum.on("accountsChanged", handleAccountsChanged);
+    return () => window.ethereum.removeListener("accountsChanged", handleAccountsChanged);
+  }, [setWalletConnected, setWalletAddress]);
 
   return (
     <div style={{
@@ -107,7 +129,7 @@ function TopBar({ activeTab, setActiveTab, walletConnected, setWalletConnected, 
         fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6,
       }}>
         <span>{walletConnected ? "🟢" : "🦊"}</span>
-        {walletConnected ? "0x72A9...1B" : "Connect Wallet"}
+        {walletConnected ? shortAddress(walletAddress) : "Connect Wallet"}
       </button>
     </div>
   );
@@ -255,6 +277,7 @@ function BookAppointment() {
   const [booked, setBooked] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [chainStatus, setChainStatus] = useState("");
 
   const depts = ["Cardiology", "Dermatology", "Orthopedics", "Neurology", "Pediatrics", "General"];
   const times = ["09:00 AM", "10:30 AM", "11:00 AM", "02:00 PM", "03:30 PM", "05:00 PM"];
@@ -269,7 +292,9 @@ function BookAppointment() {
   const confirmBooking = async () => {
     setLoading(true);
     setError("");
+    setChainStatus("");
     try {
+      // Step 1: Save appointment to backend
       const data = await apiFetch("/appointments", {
         method: "POST",
         body: JSON.stringify({
@@ -280,7 +305,22 @@ function BookAppointment() {
           time: selected.time,
         }),
       });
-      setBooked(data);
+
+      // Step 2: Issue token on blockchain
+      setChainStatus("⛓️ Minting appointment token on blockchain...");
+      try {
+        const { issueAppointmentToken } = await import("./hooks/useBlockchain");
+        // extract numeric IDs — fallback to 0 if parsing fails
+        const patientNumId = parseInt(data.appointment?.queuePosition || 1);
+        const doctorNumId  = parseInt(data.appointment?.doctorId || 1);
+        const tokenId = await issueAppointmentToken(patientNumId, doctorNumId, selected.date);
+        setChainStatus(`✅ Token #${tokenId} minted on-chain!`);
+        setBooked({ ...data, chainTokenId: tokenId });
+      } catch (chainErr) {
+        // blockchain failed but backend succeeded — still show success
+        setChainStatus(`⚠️ Backend saved, but blockchain mint failed: ${chainErr.message}`);
+        setBooked(data);
+      }
     } catch (e) {
       setError(e.message);
     } finally {
@@ -297,14 +337,23 @@ function BookAppointment() {
         }}>
           <div style={{ fontSize: 60, marginBottom: 16 }}>🎫</div>
           <div style={{ color: COLORS.green, fontWeight: 700, fontSize: 22, marginBottom: 8 }}>Appointment Confirmed!</div>
-          <div style={{ color: COLORS.muted, marginBottom: 24 }}>Your NFT appointment token has been minted</div>
+          <div style={{ color: COLORS.muted, marginBottom: 24 }}>Your appointment token has been minted on-chain</div>
           <div style={{ background: "#0a0f1e", border: `1px solid ${COLORS.cardBorder}`, borderRadius: 16, padding: 24, marginBottom: 24 }}>
-            <div style={{ color: COLORS.muted, fontSize: 12, marginBottom: 4 }}>TOKEN ID</div>
+            <div style={{ color: COLORS.muted, fontSize: 12, marginBottom: 4 }}>BACKEND TOKEN ID</div>
             <div style={{ color: COLORS.accent, fontSize: 20, fontWeight: 700, fontFamily: "'Courier New', monospace" }}>{booked.tokenId}</div>
+            {booked.chainTokenId != null && (
+              <>
+                <div style={{ color: COLORS.muted, fontSize: 12, marginTop: 12, marginBottom: 4 }}>ON-CHAIN TOKEN ID</div>
+                <div style={{ color: COLORS.green, fontSize: 18, fontWeight: 700, fontFamily: "'Courier New', monospace" }}>#{booked.chainTokenId}</div>
+              </>
+            )}
             <div style={{ color: COLORS.muted, fontSize: 11, marginTop: 8 }}>
-              Queue #{booked.appointment.queuePosition} · {booked.appointment.dept} · {booked.appointment.time}
+              Queue #{booked.appointment?.queuePosition} · {booked.appointment?.dept} · {booked.appointment?.time}
             </div>
           </div>
+          {chainStatus && (
+            <div style={{ color: COLORS.green, fontSize: 13, marginBottom: 16 }}>{chainStatus}</div>
+          )}
           <button onClick={() => { setBooked(null); setStep(1); setSelected({ dept: "", doctor: "", date: "", time: "" }); }} style={{
             background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`,
             border: "none", color: "#fff", padding: "12px 28px", borderRadius: 10, cursor: "pointer", fontWeight: 700,
@@ -335,92 +384,76 @@ function BookAppointment() {
         {step === 1 && (
           <div>
             <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 18, marginBottom: 20 }}>Select Department</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               {depts.map(d => (
                 <button key={d} onClick={() => { setSelected(s => ({ ...s, dept: d })); setStep(2); }} style={{
-                  background: "#0a0f1e", border: `1px solid ${COLORS.cardBorder}`,
-                  color: COLORS.text, padding: "16px 12px", borderRadius: 12, cursor: "pointer", fontSize: 14,
-                }}>
-                  {d === "Cardiology" ? "❤️" : d === "Dermatology" ? "🧴" : d === "Orthopedics" ? "🦴" : d === "Neurology" ? "🧠" : d === "Pediatrics" ? "👶" : "🏥"} {d}
-                </button>
+                  background: selected.dept === d ? `linear-gradient(135deg, ${COLORS.accent}22, ${COLORS.accent2}22)` : COLORS.bg,
+                  border: `1px solid ${selected.dept === d ? COLORS.accent : COLORS.cardBorder}`,
+                  color: COLORS.text, padding: "16px", borderRadius: 12, cursor: "pointer",
+                  fontSize: 14, fontWeight: 600, textAlign: "left",
+                }}>🏥 {d}</button>
               ))}
             </div>
           </div>
         )}
-
         {step === 2 && (
           <div>
-            <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 18, marginBottom: 20 }}>Select Doctor — {selected.dept}</div>
-            {doctors.length === 0 && <div style={{ color: COLORS.muted, textAlign: "center", padding: 24 }}>No doctors available.</div>}
-            {doctors.map(d => (
-              <div key={d.name} onClick={() => d.available && (setSelected(s => ({ ...s, doctor: d.name })), setStep(3))} style={{
-                background: "#0a0f1e", border: `1px solid ${COLORS.cardBorder}`,
-                borderRadius: 12, padding: 16, marginBottom: 10,
-                cursor: d.available ? "pointer" : "not-allowed", opacity: d.available ? 1 : 0.5,
-                display: "flex", justifyContent: "space-between", alignItems: "center",
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <div style={{
-                    width: 44, height: 44, borderRadius: "50%",
-                    background: `linear-gradient(135deg, ${COLORS.accent2}44, ${COLORS.accent}44)`,
-                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20,
-                  }}>👨‍⚕️</div>
-                  <div>
-                    <div style={{ color: COLORS.text, fontWeight: 600 }}>{d.name}</div>
-                    <div style={{ color: COLORS.muted, fontSize: 12 }}>{d.dept} · ⭐ {d.rating}</div>
-                  </div>
-                </div>
-                <div style={{ color: d.available ? COLORS.green : COLORS.red, fontSize: 12 }}>
-                  {d.available ? `${d.slots} slots` : "Unavailable"}
-                </div>
-              </div>
-            ))}
-            <button onClick={() => setStep(1)} style={{
-              marginTop: 8, background: "transparent", border: `1px solid ${COLORS.muted}`,
-              color: COLORS.muted, padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13,
-            }}>← Back</button>
+            <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 18, marginBottom: 20 }}>Select Doctor</div>
+            {doctors.length === 0
+              ? <div style={{ color: COLORS.muted, textAlign: "center", padding: 40 }}>Loading doctors...</div>
+              : doctors.map(d => (
+                <button key={d.name} onClick={() => { setSelected(s => ({ ...s, doctor: d.name })); setStep(3); }} style={{
+                  width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.cardBorder}`,
+                  color: COLORS.text, padding: 16, borderRadius: 12, cursor: "pointer",
+                  marginBottom: 10, textAlign: "left", display: "flex", justifyContent: "space-between",
+                }}>
+                  <span>👨‍⚕️ {d.name}</span>
+                  <span style={{ color: COLORS.muted, fontSize: 12 }}>{d.dept} · ⭐ {d.rating}</span>
+                </button>
+              ))}
+            <button onClick={() => setStep(1)} style={{ background: "none", border: "none", color: COLORS.muted, cursor: "pointer", marginTop: 12 }}>← Back</button>
           </div>
         )}
-
         {step === 3 && (
           <div>
             <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 18, marginBottom: 20 }}>Select Date & Time</div>
-            <input type="date" onChange={e => setSelected(s => ({ ...s, date: e.target.value }))} style={{
-              width: "100%", background: "#0a0f1e", border: `1px solid ${COLORS.cardBorder}`,
-              color: COLORS.text, padding: "12px 16px", borderRadius: 10, marginBottom: 20,
-              fontSize: 14, outline: "none", boxSizing: "border-box",
-            }} />
+            <input type="date" value={selected.date} onChange={e => setSelected(s => ({ ...s, date: e.target.value }))}
+              style={{ width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.cardBorder}`, color: COLORS.text, padding: 12, borderRadius: 10, fontSize: 14, marginBottom: 20 }} />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
               {times.map(t => (
-                <button key={t} onClick={() => { setSelected(s => ({ ...s, time: t })); setStep(4); }} style={{
-                  background: selected.time === t ? `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})` : "#0a0f1e",
-                  border: `1px solid ${selected.time === t ? COLORS.accent : COLORS.cardBorder}`,
+                <button key={t} onClick={() => setSelected(s => ({ ...s, time: t }))} style={{
+                  padding: "10px 8px", borderRadius: 10, fontSize: 13, cursor: "pointer",
+                  background: selected.time === t ? `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})` : COLORS.bg,
                   color: selected.time === t ? "#fff" : COLORS.text,
-                  padding: "12px 8px", borderRadius: 10, cursor: "pointer", fontSize: 13,
-                }}>🕐 {t}</button>
+                  border: `1px solid ${selected.time === t ? COLORS.accent : COLORS.cardBorder}`,
+                  fontWeight: selected.time === t ? 700 : 400,
+                }}>{t}</button>
               ))}
             </div>
-            <button onClick={() => setStep(2)} style={{
-              marginTop: 16, background: "transparent", border: `1px solid ${COLORS.muted}`,
-              color: COLORS.muted, padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13,
-            }}>← Back</button>
+            <div style={{ display: "flex", gap: 12, marginTop: 20 }}>
+              <button onClick={() => setStep(2)} style={{ background: "none", border: `1px solid ${COLORS.cardBorder}`, color: COLORS.muted, padding: "10px 20px", borderRadius: 10, cursor: "pointer" }}>← Back</button>
+              <button onClick={() => setStep(4)} disabled={!selected.date || !selected.time} style={{
+                flex: 1, background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`,
+                border: "none", color: "#fff", padding: "10px", borderRadius: 10, cursor: "pointer", fontWeight: 700,
+              }}>Continue →</button>
+            </div>
           </div>
         )}
-
         {step === 4 && (
           <div>
             <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 18, marginBottom: 20 }}>Confirm Appointment</div>
             {[["Department", selected.dept], ["Doctor", selected.doctor], ["Date", selected.date], ["Time", selected.time]].map(([k, v]) => (
-              <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "12px 0", borderBottom: `1px solid ${COLORS.cardBorder}` }}>
+              <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: `1px solid ${COLORS.cardBorder}` }}>
                 <span style={{ color: COLORS.muted }}>{k}</span>
-                <span style={{ color: COLORS.text, fontWeight: 600 }}>{v || "Not selected"}</span>
+                <span style={{ color: COLORS.text, fontWeight: 600 }}>{v}</span>
               </div>
             ))}
             {error && <div style={{ color: COLORS.red, marginTop: 12, fontSize: 13 }}>⚠️ {error}</div>}
+            {chainStatus && <div style={{ color: COLORS.green, marginTop: 12, fontSize: 13 }}>{chainStatus}</div>}
             <div style={{
               background: `${COLORS.accent}11`, border: `1px solid ${COLORS.accent}33`,
               borderRadius: 10, padding: 12, marginTop: 16, color: COLORS.accent, fontSize: 13,
-            }}>⛓️ An NFT appointment token will be minted to your wallet upon confirmation</div>
+            }}>⛓️ An appointment token will be minted to your wallet upon confirmation</div>
             <button onClick={confirmBooking} disabled={loading} style={{
               width: "100%", marginTop: 20,
               background: loading ? COLORS.cardBorder : `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`,
@@ -437,11 +470,13 @@ function BookAppointment() {
 // ─── MyRecords ────────────────────────────────────────────────────────────────
 function MyRecords({ walletConnected }) {
   const PATIENT_ID = "HLT-0x72A91B";
+  const PATIENT_NUM_ID = 72; // numeric version for blockchain
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState("");
   const [error, setError] = useState("");
+  const [verifyStatus, setVerifyStatus] = useState({}); // recordId -> "verified"|"failed"|"checking"
 
   const fetchRecords = useCallback(() => {
     setLoading(true);
@@ -461,12 +496,31 @@ function MyRecords({ walletConnected }) {
         method: "POST",
         body: JSON.stringify({ patientId: PATIENT_ID, type: "Lab Report", doctor: "Dr. Ananya Singh", dept: "Cardiology" }),
       });
-      setUploadMsg(`✅ Uploaded! IPFS hash: ${data.ipfsHash}`);
+      // Write hash on-chain
+      try {
+        const { writeRecordOnChain, hashData } = await import("./hooks/useBlockchain");
+        const hash = hashData(data);
+        await writeRecordOnChain(PATIENT_NUM_ID, hash);
+        setUploadMsg(`✅ Uploaded & anchored on blockchain! IPFS: ${data.ipfsHash}`);
+      } catch (chainErr) {
+        setUploadMsg(`✅ Backend saved. IPFS: ${data.ipfsHash} | ⚠️ Chain: ${chainErr.message}`);
+      }
       fetchRecords();
     } catch (e) {
       setUploadMsg(`⚠️ ${e.message}`);
     } finally {
       setUploading(false);
+    }
+  };
+
+  const verifyRecord = async (record, idx) => {
+    setVerifyStatus(s => ({ ...s, [idx]: "checking" }));
+    try {
+      const { verifyRecord: vr } = await import("./hooks/useBlockchain");
+      const ok = await vr(PATIENT_NUM_ID, record);
+      setVerifyStatus(s => ({ ...s, [idx]: ok ? "verified" : "failed" }));
+    } catch {
+      setVerifyStatus(s => ({ ...s, [idx]: "failed" }));
     }
   };
 
@@ -487,7 +541,7 @@ function MyRecords({ walletConnected }) {
             background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`,
             border: "none", color: "#fff", padding: "10px 20px",
             borderRadius: 10, cursor: uploading ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600,
-          }}>{uploading ? "⛓️ Uploading to IPFS..." : "📤 Upload Document"}</button>
+          }}>{uploading ? "⛓️ Anchoring on blockchain..." : "📤 Upload Document"}</button>
           {uploadMsg && <div style={{ color: COLORS.green, fontSize: 12, marginTop: 6 }}>{uploadMsg}</div>}
         </div>
       </div>
@@ -536,9 +590,26 @@ function MyRecords({ walletConnected }) {
                   <div style={{ color: COLORS.muted, fontSize: 11 }}>{r.doctor} · {r.date}</div>
                 </div>
               </div>
-              <div style={{ textAlign: "right" }}>
-                <div style={{ color: COLORS.accent, fontSize: 11, fontFamily: "monospace" }}>{r.hash.slice(0, 14)}...</div>
-                <div style={{ color: COLORS.green, fontSize: 11, marginTop: 2 }}>✓ On IPFS</div>
+              <div style={{ textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                <div style={{ color: COLORS.accent, fontSize: 11, fontFamily: "monospace" }}>{r.hash?.slice(0, 14)}...</div>
+                <div style={{ color: COLORS.green, fontSize: 11 }}>✓ On IPFS</div>
+                {walletConnected && (
+                  <button
+                    onClick={() => verifyRecord(r, i)}
+                    disabled={verifyStatus[i] === "checking"}
+                    style={{
+                      fontSize: 10, padding: "2px 8px", borderRadius: 6, cursor: "pointer", border: "none",
+                      background: verifyStatus[i] === "verified" ? `${COLORS.green}22`
+                        : verifyStatus[i] === "failed" ? `${COLORS.red}22`
+                        : `${COLORS.accent}22`,
+                      color: verifyStatus[i] === "verified" ? COLORS.green
+                        : verifyStatus[i] === "failed" ? COLORS.red
+                        : COLORS.accent,
+                    }}
+                  >
+                    {verifyStatus[i] === "checking" ? "..." : verifyStatus[i] === "verified" ? "✅ Verified" : verifyStatus[i] === "failed" ? "⚠️ Mismatch" : "🔍 Verify"}
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -548,7 +619,7 @@ function MyRecords({ walletConnected }) {
   );
 }
 
-// ─── Doctors ──────────────────────────────────────────────────────────────────
+// ─── DoctorsList ──────────────────────────────────────────────────────────────
 function DoctorsList() {
   const [doctors, setDoctors] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -727,6 +798,7 @@ function DashboardLayout() {
         setActiveTab={setActiveTab}
         walletConnected={walletConnected}
         setWalletConnected={setWalletConnected}
+        walletAddress={walletAddress}
         setWalletAddress={setWalletAddress}
       />
       <div style={{ padding: "32px 40px" }}>{renderTab()}</div>
@@ -739,15 +811,15 @@ export default function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/"          element={<LandingPage />} />
-        <Route path="/signup"    element={<Signup />} />
-        <Route path="/login"     element={<Login />} />
-        <Route path="/dashboard" element={<DashboardLayout />} />
-        <Route path="/doctor"    element={<DoctorDashboard />} />
-        <Route path="/doctor/submit" element={<DoctorSubmitPage />} />
+        <Route path="/"               element={<LandingPage />} />
+        <Route path="/signup"         element={<Signup />} />
+        <Route path="/login"          element={<Login />} />
+        <Route path="/dashboard"      element={<DashboardLayout />} />
+        <Route path="/doctor"         element={<DoctorDashboard />} />
+        <Route path="/doctor/submit"  element={<DoctorSubmitPage />} />
         <Route path="/patient/dashboard" element={<PatientDashboard />} />
-        <Route path="/patient/upload"    element={<PatientSubmit />} />
-        <Route path="*"          element={<NotFound />} />
+        <Route path="/patient/upload" element={<PatientSubmit />} />
+        <Route path="*"               element={<NotFound />} />
       </Routes>
     </Router>
   );
