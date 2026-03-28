@@ -6,6 +6,25 @@ import { hashFile, writeRecordOnChain, hashData } from "../hooks/useBlockchain";
 const API = process.env.REACT_APP_API_URL || "http://localhost:5000/api";
 const PATIENT_NUM_ID = 72; // numeric ID used for smart contract
 
+function getStoredPatientId() {
+  try {
+    const u = JSON.parse(localStorage.getItem("user") || "{}");
+    if (u.patientId) return u.patientId;
+  } catch (_) {}
+  return "HLT-0x72A91B";
+}
+
+function notifyRecordsChanged() {
+  try {
+    const bc = new BroadcastChannel("medichain-sync");
+    bc.postMessage({ type: "records-changed" });
+    bc.close();
+  } catch (_) {}
+  try {
+    localStorage.setItem("medichain-records-bump", String(Date.now()));
+  } catch (_) {}
+}
+
 const COLORS = {
   bg: "#0a0f1e", card: "#0f1729", cardBorder: "#1a2540",
   accent: "#00d4ff", accent2: "#7c3aed", green: "#10b981",
@@ -172,33 +191,51 @@ export function PatientUploadPage() {
       const fHash = await hashFile(uploadedFiles[0]);
       setFileHash(fHash);
 
-      // ── Step 2: Call backend API ─────────────────────────────────────────────
-      const formData = new FormData();
-      uploadedFiles.forEach(f => formData.append("files", f));
-      formData.append("category", category);
-      formData.append("patientId", "HLT-0x72A91B");
-      formData.append("fileHash", fHash);
-
+      // ── Step 2: Save metadata + hash on backend (JSON — works without multer) ─
+      const patientId = getStoredPatientId();
       let savedRecord = null;
       try {
-        const res = await fetch(`${API}/records/upload`, { method: "POST", body: formData });
+        const res = await fetch(`${API}/records`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            patientId,
+            category,
+            fileName: uploadedFiles[0].name,
+            fileHash: fHash,
+            doctor: "Self Upload",
+            dept: "General",
+          }),
+        });
         savedRecord = await res.json();
+        if (!res.ok) throw new Error(savedRecord.error || "Could not save record");
         if (savedRecord.aiSummary) setAiSummary(savedRecord.aiSummary);
+        else if (savedRecord.record?.aiSummary) setAiSummary(savedRecord.record.aiSummary);
+        notifyRecordsChanged();
       } catch (_) {
-        // Backend may not have file upload yet — use mock AI summary
         setAiSummary({
           keyFindings: ["Report uploaded and hashed", `File: ${uploadedFiles[0].name}`, `Category: ${category}`],
-          plainLanguage: "Your document has been securely uploaded and its cryptographic fingerprint anchored on the blockchain. A doctor will review and provide detailed AI analysis.",
-          recommendedSteps: ["Wait for doctor review", "Check back for full AI summary", "Your data is immutably secured on-chain"],
+          plainLanguage: "Your document has been securely hashed. Connect the backend to list it in the doctor portal.",
+          recommendedSteps: ["Start the API server on port 5000", "Wait for doctor review", "Retry upload"],
         });
       }
 
       // ── Step 3: Anchor hash on blockchain ────────────────────────────────────
       setBlockchainStatus("pending");
       try {
-        const recordPayload = { category, fileName: uploadedFiles[0].name, fileHash: fHash, patientId: "HLT-0x72A91B" };
-        const dataHash = hashData(savedRecord || recordPayload);
-        await writeRecordOnChain(PATIENT_NUM_ID, dataHash);
+        if (!window.ethereum) throw new Error("MetaMask not installed");
+        await window.ethereum.request({ method: "eth_requestAccounts" });
+
+        const recordPayload = { category, fileName: uploadedFiles[0].name, fileHash: fHash, patientId };
+        const dataHash = hashData(savedRecord?.record || savedRecord || recordPayload);
+        const chainPid = (() => {
+          try {
+            const u = JSON.parse(localStorage.getItem("user") || "{}");
+            if (u.chainPatientId != null && u.chainPatientId !== "") return Number(u.chainPatientId);
+          } catch (_) {}
+          return PATIENT_NUM_ID;
+        })();
+        await writeRecordOnChain(chainPid, dataHash);
         setBlockchainStatus("anchored");
         toast.success("Record anchored on blockchain! ✅");
       } catch (chainErr) {

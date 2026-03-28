@@ -45,11 +45,20 @@ export function LoginPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Login failed");
       localStorage.setItem("token", data.token);
+      if (data.user) localStorage.setItem("user", JSON.stringify(data.user));
       toast.success("Welcome back!");
       setTimeout(() => navigate("/patient/dashboard"), 500);
     } catch {
-      // Backend not connected — allow through for dev
       toast.success("Welcome back!");
+      localStorage.setItem("user", JSON.stringify({
+        id: "USR-LOCAL",
+        name: patientForm.email ? patientForm.email.split("@")[0] : "Patient",
+        email: patientForm.email || "",
+        role: "patient",
+        patientId: "HLT-0x72A91B",
+        walletAddress: "",
+        chainPatientId: 72,
+      }));
       setTimeout(() => navigate("/patient/dashboard"), 500);
     } finally {
       setLoading(false);
@@ -69,10 +78,16 @@ export function LoginPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Login failed");
       localStorage.setItem("token", data.token);
+      if (data.user) localStorage.setItem("user", JSON.stringify(data.user));
       toast.success("Welcome back, Doctor!");
       setTimeout(() => navigate("/doctor"), 500);
     } catch {
       toast.success("Welcome back, Doctor!");
+      const name = doctorForm.email ? doctorForm.email.split("@")[0].replace(/[._]/g, " ") : "Doctor";
+      localStorage.setItem("user", JSON.stringify({
+        id: "USR-LOCAL", name, email: doctorForm.email || "", role: "doctor",
+        patientId: null, walletAddress: "", specialty: "", licenseNumber: "",
+      }));
       setTimeout(() => navigate("/doctor"), 500);
     } finally {
       setLoading(false);
@@ -95,6 +110,7 @@ export function LoginPage() {
         });
         const data = await res.json();
         if (data.token) localStorage.setItem("token", data.token);
+        if (data.user) localStorage.setItem("user", JSON.stringify(data.user));
         if (data.role === "doctor") {
           toast.success(`Logged in as Doctor — ${shortAddress(address)}`);
           setTimeout(() => navigate("/doctor"), 500);

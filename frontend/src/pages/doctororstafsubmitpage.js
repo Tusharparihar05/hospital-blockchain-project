@@ -126,23 +126,33 @@ export function DoctorSubmitPage() {
       // ── Step 2: Submit to backend ─────────────────────────────────────────
       let savedRecord = null;
       try {
-        const formData = new FormData();
-        uploadedFiles.forEach(f => formData.append("files", f));
-        formData.append("patientId", selectedPatient.id);
-        formData.append("category", category);
-        formData.append("notes", notes);
-        formData.append("fileHash", fileHash);
-
-        const res  = await fetch(`${API}/records/upload`, { method: "POST", body: formData });
+        const res = await fetch(`${API}/records`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            patientId: selectedPatient.id,
+            category,
+            fileName: uploadedFiles[0]?.name || (notes ? `Clinical_notes_${category}.txt` : "Staff upload"),
+            fileHash: fileHash || `0x${Date.now().toString(16)}`,
+            doctor: "Hospital Staff",
+            dept: category,
+          }),
+        });
         savedRecord = await res.json();
+        if (!res.ok) throw new Error(savedRecord.error || "Save failed");
+        try {
+          const bc = new BroadcastChannel("medichain-sync");
+          bc.postMessage({ type: "records-changed" });
+          bc.close();
+        } catch (_) {}
+        try { localStorage.setItem("medichain-records-bump", String(Date.now())); } catch (_) {}
       } catch (_) {
-        // backend offline — continue with local data
         savedRecord = { patientId: selectedPatient.id, category, notes, fileHash, uploadedAt: new Date().toISOString() };
       }
 
       // ── Step 3: Anchor hash on blockchain ─────────────────────────────────
       const patientNumId = parseInt(selectedPatient.id?.replace(/\D/g, "").slice(0, 5) || "1");
-      const dataHash     = hashData(savedRecord);
+      const dataHash     = hashData(savedRecord?.record || savedRecord);
 
       try {
         await writeRecordOnChain(patientNumId, dataHash);

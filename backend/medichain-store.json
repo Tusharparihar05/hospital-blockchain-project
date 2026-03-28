@@ -1,0 +1,229 @@
+{
+  "records": [
+    {
+      "id": "REC-001",
+      "patientId": "HLT-0x72A91B",
+      "fileName": "Blood_Test_March2026.pdf",
+      "category": "Blood Test",
+      "uploadDate": "2026-03-01",
+      "doctor": "Dr. Ananya Singh",
+      "hash": "0xabc123def456",
+      "dept": "Cardiology",
+      "aiSummary": {
+        "keyFindings": [
+          "Cholesterol slightly elevated at 210 mg/dL",
+          "Blood glucose normal at 95 mg/dL",
+          "Hemoglobin within range at 14.5 g/dL"
+        ],
+        "plainLanguage": "Your blood test shows mostly good results. Blood sugar and red blood cells are healthy. Cholesterol is slightly high — manageable with diet and exercise.",
+        "recommendedSteps": [
+          "Reduce saturated fat intake",
+          "30 min daily exercise",
+          "Follow-up in 3 months"
+        ]
+      }
+    },
+    {
+      "id": "REC-002",
+      "patientId": "HLT-0x72A91B",
+      "fileName": "Chest_Xray_Feb2026.pdf",
+      "category": "X-Ray",
+      "uploadDate": "2026-02-14",
+      "doctor": "Dr. Meena Roy",
+      "hash": "0xdef456ghi789",
+      "dept": "Orthopedics",
+      "aiSummary": {
+        "keyFindings": [
+          "No abnormalities detected",
+          "Lung fields clear",
+          "Heart size normal"
+        ],
+        "plainLanguage": "Your chest X-ray looks completely normal. Lungs are clear and heart is a healthy size.",
+        "recommendedSteps": [
+          "No immediate action required",
+          "Routine check in 1 year"
+        ]
+      }
+    },
+    {
+      "id": "REC-003",
+      "patientId": "HLT-0x72A91B",
+      "fileName": "Prescription_Jan2026.pdf",
+      "category": "Prescription",
+      "uploadDate": "2026-01-20",
+      "doctor": "Dr. Vikram Patel",
+      "hash": "0xghi789jkl012",
+      "dept": "Dermatology",
+      "aiSummary": null
+    },
+    {
+      "id": "REC-775F",
+      "patientId": "HLT-0x72A91B",
+      "fileName": "Signature.jpg",
+      "category": "Other",
+      "uploadDate": "2026-03-28",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "blockchainHash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
+    },
+    {
+      "id": "REC-D447",
+      "patientId": "HLT-0x72A91B",
+      "fileName": "Signature.jpg",
+      "category": "Other",
+      "uploadDate": "2026-03-28",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "blockchainHash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
+    },
+    {
+      "id": "REC-DB1E",
+      "patientId": "HLT-0x72A91B",
+      "fileName": "Signature.jpg",
+      "category": "Other",
+      "uploadDate": "2026-03-28",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "blockchainHash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
+    },
+    {
+      "id": "REC-D23F",
+      "patientId": "HLT-0x72A91B",
+      "fileName": "Signature.jpg",
+      "category": "General Checkup",
+      "uploadDate": "2026-03-28",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "blockchainHash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
+    },
+    {
+      "id": "REC-BC1F",
+      "patientId": "HLT-0x72A91B",
+      "fileName": "Signature.jpg",
+      "category": "Other",
+      "uploadDate": "2026-03-28",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "blockchainHash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
+    },
+    {
+      "id": "REC-C6B5",
+      "patientId": "HLT-0x72A91B",
+      "fileName": "Signature.jpg",
+      "category": "General Checkup",
+      "uploadDate": "2026-03-28",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "blockchainHash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
+    },
+    {
+      "id": "REC-E33A",
+      "patientId": "HLT-0x6F9AF6",
+      "fileName": "Signature.jpg",
+      "category": "Other",
+      "uploadDate": "2026-03-28",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "blockchainHash": "0x98f43dcf3f93f6c4ea65d17d287bef358c0c70c67de958b67862b2c09479c422",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
+    }
+  ],
+  "appointments": []
+}

@@ -62,11 +62,20 @@ export function SignupPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Signup failed");
       if (data.token) localStorage.setItem("token", data.token);
+      if (data.user) localStorage.setItem("user", JSON.stringify(data.user));
       toast.success("Patient account created successfully!");
       setTimeout(() => navigate("/patient/dashboard"), 1000);
     } catch {
-      // Backend not connected — proceed
       toast.success("Patient account created successfully!");
+      localStorage.setItem("user", JSON.stringify({
+        id: "USR-LOCAL",
+        name: patientForm.name,
+        email: patientForm.email,
+        role: "patient",
+        patientId: "HLT-0x72A91B",
+        walletAddress: walletAddress || "",
+        chainPatientId: Math.floor(Math.random() * 900000) + 100000,
+      }));
       setTimeout(() => navigate("/patient/dashboard"), 1000);
     } finally {
       setLoading(false);
@@ -95,10 +104,16 @@ export function SignupPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Signup failed");
       if (data.token) localStorage.setItem("token", data.token);
+      if (data.user) localStorage.setItem("user", JSON.stringify(data.user));
       toast.success("Doctor account created! License verified.");
       setTimeout(() => navigate("/doctor"), 1000);
     } catch {
       toast.success("Doctor account created! License verified.");
+      localStorage.setItem("user", JSON.stringify({
+        id: "USR-LOCAL", name: doctorForm.name, email: doctorForm.email, role: "doctor",
+        patientId: null, walletAddress: walletAddress || "",
+        specialty: doctorForm.specialty, licenseNumber: doctorForm.licenseNumber,
+      }));
       setTimeout(() => navigate("/doctor"), 1000);
     } finally {
       setLoading(false);
