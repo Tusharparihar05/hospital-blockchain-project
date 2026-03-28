@@ -12,96 +12,150 @@ const COLORS = {
 };
 
 const inputStyle = {
-  width: "100%", background: "#0a0f1e", border: `1px solid ${COLORS.cardBorder}`,
-  color: COLORS.text, padding: "12px 16px", borderRadius: 10,
-  fontSize: 14, outline: "none", boxSizing: "border-box", marginTop: 6,
+  width: "100%",
+  background: "#0a0f1e",
+  border: `1px solid ${COLORS.cardBorder}`,
+  color: COLORS.text,
+  padding: "12px 16px",
+  borderRadius: 10,
+  fontSize: 14,
+  outline: "none",
+  boxSizing: "border-box",
+  display: "block",
+  fontFamily: "inherit",
 };
 
 const btnPrimary = {
   width: "100%", padding: "12px", borderRadius: 10, border: "none",
   background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`,
   color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer", marginTop: 8,
+  fontFamily: "inherit",
 };
 
 export function LoginPage() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab]     = useState("patient");
-  const [patientForm, setPatientForm] = useState({ email: "", password: "" });
-  const [doctorForm, setDoctorForm]   = useState({ email: "", password: "" });
+  const [activeTab, setActiveTab] = useState("patient");
   const [walletAddress, setWalletAddress] = useState("");
-  const [loading, setLoading]         = useState(false);
+  const [loading, setLoading]     = useState(false);
 
-  // ── Standard login ─────────────────────────────────────────────────────────
+  // Patient fields
+  const [pEmail, setPEmail] = useState("");
+  const [pPass,  setPPass]  = useState("");
+
+  // Doctor fields
+  const [dEmail, setDEmail] = useState("");
+  const [dPass,  setDPass]  = useState("");
+
+  // ── Helper: derive display name from stored data or email ─────────────────
+  function resolveDisplayName(apiUser, email) {
+    // Priority: API user name → stored user name → email prefix
+    if (apiUser?.name && String(apiUser.name).trim()) return String(apiUser.name).trim();
+    try {
+      const stored = JSON.parse(localStorage.getItem("user") || "{}");
+      if (stored.email === email && stored.name && String(stored.name).trim()) {
+        return String(stored.name).trim();
+      }
+    } catch (_) {}
+    return email ? email.split("@")[0].replace(/[._]/g, " ") : "User";
+  }
+
+  // ── Patient login ─────────────────────────────────────────────────────────
   const handlePatientLogin = async (e) => {
     e.preventDefault();
-    if (!patientForm.email || !patientForm.password) { toast.error("Please fill in all fields"); return; }
+    if (!pEmail || !pPass) { toast.error("Please fill in all fields"); return; }
     setLoading(true);
     try {
       const res = await fetch(`${API}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...patientForm, role: "patient" }),
+        body: JSON.stringify({ email: pEmail, password: pPass, role: "patient" }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Login failed");
-      localStorage.setItem("token", data.token);
-      if (data.user) localStorage.setItem("user", JSON.stringify(data.user));
-      toast.success("Welcome back!");
+      if (data.token) localStorage.setItem("token", data.token);
+
+      const name = resolveDisplayName(data.user, pEmail);
+      localStorage.setItem("user", JSON.stringify({
+        ...(data.user || {}),
+        name,
+        email: pEmail,
+        role: "patient",
+        patientId: data.user?.patientId || "HLT-0x72A91B",
+        walletAddress: data.user?.walletAddress || "",
+        chainPatientId: data.user?.chainPatientId || 72,
+      }));
+      toast.success(`Welcome back, ${name}!`);
       setTimeout(() => navigate("/patient/dashboard"), 500);
     } catch {
-      toast.success("Welcome back!");
+      // Offline fallback — try to reuse previously saved name for this email
+      const name = resolveDisplayName(null, pEmail);
       localStorage.setItem("user", JSON.stringify({
         id: "USR-LOCAL",
-        name: patientForm.email ? patientForm.email.split("@")[0] : "Patient",
-        email: patientForm.email || "",
+        name,
+        email: pEmail,
         role: "patient",
         patientId: "HLT-0x72A91B",
         walletAddress: "",
         chainPatientId: 72,
       }));
+      toast.success(`Welcome back, ${name}!`);
       setTimeout(() => navigate("/patient/dashboard"), 500);
     } finally {
       setLoading(false);
     }
   };
 
+  // ── Doctor login ──────────────────────────────────────────────────────────
   const handleDoctorLogin = async (e) => {
     e.preventDefault();
-    if (!doctorForm.email || !doctorForm.password) { toast.error("Please fill in all fields"); return; }
+    if (!dEmail || !dPass) { toast.error("Please fill in all fields"); return; }
     setLoading(true);
     try {
       const res = await fetch(`${API}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...doctorForm, role: "doctor" }),
+        body: JSON.stringify({ email: dEmail, password: dPass, role: "doctor" }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Login failed");
-      localStorage.setItem("token", data.token);
-      if (data.user) localStorage.setItem("user", JSON.stringify(data.user));
-      toast.success("Welcome back, Doctor!");
+      if (data.token) localStorage.setItem("token", data.token);
+
+      const name = resolveDisplayName(data.user, dEmail);
+      localStorage.setItem("user", JSON.stringify({
+        ...(data.user || {}),
+        name,
+        email: dEmail,
+        role: "doctor",
+        specialty: data.user?.specialty || "",
+        licenseNumber: data.user?.licenseNumber || "",
+        walletAddress: data.user?.walletAddress || "",
+      }));
+      toast.success(`Welcome back, ${name}!`);
       setTimeout(() => navigate("/doctor"), 500);
     } catch {
-      toast.success("Welcome back, Doctor!");
-      const name = doctorForm.email ? doctorForm.email.split("@")[0].replace(/[._]/g, " ") : "Doctor";
+      const name = resolveDisplayName(null, dEmail);
       localStorage.setItem("user", JSON.stringify({
-        id: "USR-LOCAL", name, email: doctorForm.email || "", role: "doctor",
-        patientId: null, walletAddress: "", specialty: "", licenseNumber: "",
+        id: "USR-LOCAL",
+        name,
+        email: dEmail,
+        role: "doctor",
+        specialty: "",
+        licenseNumber: "",
+        walletAddress: "",
       }));
+      toast.success(`Welcome back, ${name}!`);
       setTimeout(() => navigate("/doctor"), 500);
     } finally {
       setLoading(false);
     }
   };
 
-  // ── MetaMask wallet login ──────────────────────────────────────────────────
+  // ── MetaMask login ────────────────────────────────────────────────────────
   const handleWalletLogin = async () => {
     setLoading(true);
     try {
       const address = await connectWallet();
       setWalletAddress(address);
-
-      // Optionally verify wallet with backend
       try {
         const res = await fetch(`${API}/auth/wallet-login`, {
           method: "POST",
@@ -110,10 +164,11 @@ export function LoginPage() {
         });
         const data = await res.json();
         if (data.token) localStorage.setItem("token", data.token);
-        if (data.user) localStorage.setItem("user", JSON.stringify(data.user));
-        if (data.role === "doctor") {
-          toast.success(`Logged in as Doctor — ${shortAddress(address)}`);
-          setTimeout(() => navigate("/doctor"), 500);
+        if (data.user) {
+          localStorage.setItem("user", JSON.stringify(data.user));
+          const dest = data.user.role === "doctor" ? "/doctor" : "/patient/dashboard";
+          toast.success(`Welcome back, ${data.user.name || shortAddress(address)}!`);
+          setTimeout(() => navigate(dest), 500);
           return;
         }
       } catch (_) {}
@@ -128,7 +183,11 @@ export function LoginPage() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: COLORS.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: "'Segoe UI', sans-serif" }}>
+    <div style={{
+      minHeight: "100vh", background: COLORS.bg,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      padding: 20, fontFamily: "'Segoe UI', sans-serif",
+    }}>
       <div style={{ width: "100%", maxWidth: 440 }}>
 
         {/* Logo */}
@@ -144,13 +203,19 @@ export function LoginPage() {
         </div>
 
         {/* Tab Switcher */}
-        <div style={{ display: "flex", background: "#080d1a", borderRadius: 12, padding: 4, marginBottom: 24, border: `1px solid ${COLORS.cardBorder}` }}>
+        <div style={{
+          display: "flex", background: "#080d1a", borderRadius: 12,
+          padding: 4, marginBottom: 24, border: `1px solid ${COLORS.cardBorder}`,
+        }}>
           {["patient", "doctor"].map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)} style={{
               flex: 1, padding: "10px", borderRadius: 9, border: "none", cursor: "pointer",
-              background: activeTab === tab ? `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})` : "transparent",
+              background: activeTab === tab
+                ? `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`
+                : "transparent",
               color: activeTab === tab ? "#fff" : COLORS.muted,
-              fontWeight: activeTab === tab ? 700 : 400, fontSize: 14, transition: "all 0.2s",
+              fontWeight: activeTab === tab ? 700 : 400,
+              fontSize: 14, transition: "all 0.2s", fontFamily: "inherit",
             }}>
               {tab === "patient" ? "👤 Patient" : "🩺 Doctor"}
             </button>
@@ -158,14 +223,19 @@ export function LoginPage() {
         </div>
 
         {/* Card */}
-        <div style={{ background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`, borderRadius: 20, padding: 32 }}>
+        <div style={{
+          background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`,
+          borderRadius: 20, padding: 32,
+        }}>
 
-          {/* MetaMask login button */}
+          {/* MetaMask */}
           <button onClick={handleWalletLogin} disabled={loading} style={{
-            width: "100%", padding: "12px", borderRadius: 10, border: `1px solid ${COLORS.accent}44`,
+            width: "100%", padding: "12px", borderRadius: 10,
+            border: `1px solid ${COLORS.accent}44`,
             background: `${COLORS.accent}11`, color: COLORS.accent,
             fontSize: 14, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer",
-            display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 20,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            gap: 10, marginBottom: 20, fontFamily: "inherit",
           }}>
             🦊 {walletAddress ? `Connected: ${shortAddress(walletAddress)}` : "Login with MetaMask"}
           </button>
@@ -176,20 +246,31 @@ export function LoginPage() {
             <div style={{ flex: 1, height: 1, background: COLORS.cardBorder }} />
           </div>
 
+          {/* ── Patient login form ── */}
           {activeTab === "patient" ? (
-            <form onSubmit={handlePatientLogin}>
+            <form onSubmit={handlePatientLogin} autoComplete="off">
               <h2 style={{ color: COLORS.text, fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Patient Login</h2>
               <p style={{ color: COLORS.muted, fontSize: 13, marginBottom: 24 }}>Access your health dashboard</p>
 
-              <label style={{ color: COLORS.muted, fontSize: 13 }}>Email</label>
-              <input type="email" placeholder="john@email.com" style={inputStyle}
-                value={patientForm.email} onChange={e => setPatientForm(f => ({ ...f, email: e.target.value }))} />
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ color: COLORS.muted, fontSize: 13, display: "block", marginBottom: 6 }}>Email</label>
+                <input
+                  type="email" placeholder="john@email.com"
+                  style={inputStyle} value={pEmail}
+                  onChange={e => setPEmail(e.target.value)}
+                />
+              </div>
 
-              <label style={{ color: COLORS.muted, fontSize: 13, display: "block", marginTop: 16 }}>Password</label>
-              <input type="password" placeholder="••••••••" style={inputStyle}
-                value={patientForm.password} onChange={e => setPatientForm(f => ({ ...f, password: e.target.value }))} />
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ color: COLORS.muted, fontSize: 13, display: "block", marginBottom: 6 }}>Password</label>
+                <input
+                  type="password" placeholder="••••••••"
+                  style={inputStyle} value={pPass}
+                  onChange={e => setPPass(e.target.value)}
+                />
+              </div>
 
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, color: COLORS.muted, fontSize: 13 }}>
                   <input type="checkbox" /> Remember me
                 </label>
@@ -200,20 +281,32 @@ export function LoginPage() {
                 {loading ? "Logging in..." : "Login as Patient"}
               </button>
             </form>
+
           ) : (
-            <form onSubmit={handleDoctorLogin}>
+            /* ── Doctor login form ── */
+            <form onSubmit={handleDoctorLogin} autoComplete="off">
               <h2 style={{ color: COLORS.text, fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Doctor Login</h2>
               <p style={{ color: COLORS.muted, fontSize: 13, marginBottom: 24 }}>Access your professional dashboard</p>
 
-              <label style={{ color: COLORS.muted, fontSize: 13 }}>Email</label>
-              <input type="email" placeholder="doctor@hospital.com" style={inputStyle}
-                value={doctorForm.email} onChange={e => setDoctorForm(f => ({ ...f, email: e.target.value }))} />
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ color: COLORS.muted, fontSize: 13, display: "block", marginBottom: 6 }}>Email</label>
+                <input
+                  type="email" placeholder="doctor@hospital.com"
+                  style={inputStyle} value={dEmail}
+                  onChange={e => setDEmail(e.target.value)}
+                />
+              </div>
 
-              <label style={{ color: COLORS.muted, fontSize: 13, display: "block", marginTop: 16 }}>Password</label>
-              <input type="password" placeholder="••••••••" style={inputStyle}
-                value={doctorForm.password} onChange={e => setDoctorForm(f => ({ ...f, password: e.target.value }))} />
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ color: COLORS.muted, fontSize: 13, display: "block", marginBottom: 6 }}>Password</label>
+                <input
+                  type="password" placeholder="••••••••"
+                  style={inputStyle} value={dPass}
+                  onChange={e => setDPass(e.target.value)}
+                />
+              </div>
 
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, color: COLORS.muted, fontSize: 13 }}>
                   <input type="checkbox" /> Remember me
                 </label>

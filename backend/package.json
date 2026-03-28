@@ -4,6 +4,7 @@
   "description": "Backend folder",
   "main": "index.js",
   "scripts": {
+    "dev": "nodemon server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -13,6 +14,7 @@
   "dependencies": {
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "multer": "^2.1.1",
     "nodemon": "^3.1.14"
   }
 }

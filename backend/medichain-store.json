@@ -223,7 +223,175 @@
           "Your record is listed in the doctor portal"
         ]
       }
+    },
+    {
+      "id": "REC-CBAB",
+      "patientId": "HLT-0xF95725",
+      "fileName": "c69a39707daf64663df125c5a4661769.png",
+      "category": "Blood Test",
+      "uploadDate": "2026-03-28",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0xda571f92654a9642d8fedc1092e4b9471f7588555659777c71cb934e3b698de5",
+      "blockchainHash": "0xda571f92654a9642d8fedc1092e4b9471f7588555659777c71cb934e3b698de5",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
+    },
+    {
+      "id": "REC-64A5",
+      "patientId": "HLT-0x041B7E",
+      "fileName": "c69a39707daf64663df125c5a4661769.png",
+      "category": "Other",
+      "uploadDate": "2026-03-28",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0xda571f92654a9642d8fedc1092e4b9471f7588555659777c71cb934e3b698de5",
+      "blockchainHash": "0xda571f92654a9642d8fedc1092e4b9471f7588555659777c71cb934e3b698de5",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
+    },
+    {
+      "id": "REC-2968",
+      "patientId": "HLT-0x041B7E",
+      "fileName": "c69a39707daf64663df125c5a4661769.png",
+      "category": "General Checkup",
+      "uploadDate": "2026-03-28",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0xda571f92654a9642d8fedc1092e4b9471f7588555659777c71cb934e3b698de5",
+      "blockchainHash": "0xda571f92654a9642d8fedc1092e4b9471f7588555659777c71cb934e3b698de5",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
+    },
+    {
+      "id": "REC-F90B",
+      "patientId": "HLT-0x041B7E",
+      "fileName": "c69a39707daf64663df125c5a4661769.png",
+      "category": "X-Ray",
+      "uploadDate": "2026-03-28",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0xda571f92654a9642d8fedc1092e4b9471f7588555659777c71cb934e3b698de5",
+      "blockchainHash": "0xda571f92654a9642d8fedc1092e4b9471f7588555659777c71cb934e3b698de5",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
+    },
+    {
+      "id": "REC-561A",
+      "patientId": "HLT-0x041B7E",
+      "fileName": "c69a39707daf64663df125c5a4661769.png",
+      "category": "Blood Test",
+      "uploadDate": "2026-03-28",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0xda571f92654a9642d8fedc1092e4b9471f7588555659777c71cb934e3b698de5",
+      "blockchainHash": "0xda571f92654a9642d8fedc1092e4b9471f7588555659777c71cb934e3b698de5",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
+    },
+    {
+      "id": "REC-7270",
+      "patientId": "HLT-0x041B7E",
+      "fileName": "c69a39707daf64663df125c5a4661769.png",
+      "category": "Other",
+      "uploadDate": "2026-03-28",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0xda571f92654a9642d8fedc1092e4b9471f7588555659777c71cb934e3b698de5",
+      "blockchainHash": "0xda571f92654a9642d8fedc1092e4b9471f7588555659777c71cb934e3b698de5",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
     }
   ],
-  "appointments": []
+  "appointments": [],
+  "doctorLicenseVerifications": [
+    {
+      "id": "LIC-9A528E",
+      "email": "priyanshurajput1820@gmail.com",
+      "licenseNumber": "Med12345678910",
+      "documentHash": "",
+      "status": "verified",
+      "issuer": "MediChain Demo Verifier (not a real medical council)",
+      "verifiedAt": "2026-03-28T14:18:03.318Z",
+      "note": "Mock pass: in production, call your institutional API (e.g. state medical register) before setting verified.",
+      "createdAt": "2026-03-28T14:18:03.318Z"
+    },
+    {
+      "id": "LIC-148034",
+      "email": "priyanshurajput1820@gmail.com",
+      "licenseNumber": "Med12345678910",
+      "documentHash": "",
+      "status": "verified",
+      "issuer": "MediChain Demo Verifier (not a real medical council)",
+      "verifiedAt": "2026-03-28T14:19:47.134Z",
+      "note": "Mock pass: in production, call your institutional API (e.g. state medical register) before setting verified.",
+      "createdAt": "2026-03-28T14:19:47.134Z"
+    }
+  ]
 }
