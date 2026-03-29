@@ -35,20 +35,15 @@ userSchema.index({ role: 1, isActive: 1 });
 userSchema.index({ specialty: 1, isActive: 1 });
 userSchema.index({ name: 'text', specialty: 'text', hospital: 'text' });
 
-userSchema.pre('save', async function(next) {
-  try {
-    if (this.isModified('passwordHash')) {
-      this.passwordHash = await bcrypt.hash(this.passwordHash, 12);
-    }
-    if (this.role === 'patient' && !this.patientId) {
-      const hex = Math.floor(Math.random() * 0xFFFFFF)
-        .toString(16).toUpperCase().padStart(6, '0');
-      this.patientId = 'HLT-0x' + hex;
-      this.chainPatientId = parseInt(hex, 16) % 900000 + 100000;
-    }
-    next();
-  } catch (err) {
-    next(err);
+userSchema.pre("save", async function() {
+  if (this.isModified("passwordHash")) {
+    this.passwordHash = await bcrypt.hash(this.passwordHash, 12);
+  }
+  if (this.role === 'patient' && !this.patientId) {
+    const hex = Math.floor(Math.random() * 0xFFFFFF)
+      .toString(16).toUpperCase().padStart(6, '0');
+    this.patientId = 'HLT-0x' + hex;
+    this.chainPatientId = parseInt(hex, 16) % 900000 + 100000;
   }
 });
 
