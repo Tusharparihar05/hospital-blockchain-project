@@ -3,6 +3,10 @@ import { useNavigate } from "react-router-dom";
 
 // ── API config (from your original file) ─────────────────────────────────────
 const API = process.env.REACT_APP_API_URL || "http://localhost:5000/api";
+function authHeaders() {
+  const token = localStorage.getItem("token");
+  return token ? { "Authorization": `Bearer ${token}` } : {};
+}
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const C = {
@@ -1042,10 +1046,12 @@ export function DoctorDashboard() {
     const load = async (quiet) => {
       if (!quiet) setLoadingAppts(true);
       try {
+        // ── Edit 2: add authHeaders to all four fetch calls ──────────────────
+        const headers = authHeaders();
         const [pr, ar, rr, dr] = await Promise.all([
-          fetch(`${API}/patients`),
-          fetch(`${API}/appointments`),
-          fetch(`${API}/records`),
+          fetch(`${API}/patients`,     { headers }),
+          fetch(`${API}/appointments`, { headers }),
+          fetch(`${API}/records`,      { headers }),
           fetch(`${API}/doctors`),
         ]);
         const pts = pr.ok ? await pr.json() : null;
@@ -1106,11 +1112,14 @@ export function DoctorDashboard() {
     };
   }, []);
 
-  // Complete appointment + mint blockchain token
+  // ── Edit 3: Complete appointment + mint blockchain token (with authHeaders) ──
   const handleCompleteAppt = async (appt) => {
     setChainStatus(s => ({ ...s, [appt.id]: "minting" }));
     try {
-      await fetch(`${API}/appointments/${appt.id}/complete`, { method: "PUT" }).catch(() => {});
+      await fetch(`${API}/appointments/${appt.id}/complete`, {
+        method: "PUT",
+        headers: authHeaders(),
+      }).catch(() => {});
       const { issueAppointmentToken } = await import("../hooks/useBlockchain");
       const tokenId = await issueAppointmentToken(
         parseInt(appt.patientId?.replace(/\D/g, "").slice(0, 5) || "1"),
@@ -1127,9 +1136,16 @@ export function DoctorDashboard() {
     }
   };
 
+  // ── Edit 3: Reschedule (with authHeaders) ────────────────────────────────────
   const handleReschedule = async (appt) => {
-    try { await fetch(`${API}/appointments/${appt.id}/reschedule`, { method: "PUT" }).catch(() => {}); }
-    finally { show("Reschedule request sent to patient", "info"); }
+    try {
+      await fetch(`${API}/appointments/${appt.id}/reschedule`, {
+        method: "PUT",
+        headers: authHeaders(),
+      }).catch(() => {});
+    } finally {
+      show("Reschedule request sent to patient", "info");
+    }
   };
 
   const handleLogout = () => {
