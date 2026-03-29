@@ -1,226 +1,155 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/utils/Pausable.sol";
-
 /**
  * @title DoctorRegistry
- * @notice On-chain registry that maps verified doctor wallets to their
- *         license hashes and specialty. The hospital admin verifies a
- *         doctor once; after that, any smart contract or frontend can
- *         confirm the doctor's status without trusting the database.
+ * @notice On-chain registry of verified doctors.
+ *         Admin registers → Admin verifies → Anyone can check isVerified().
+ *         Revocation is permanent and auditable.
+ *
+ * ABI consumed by backend/routes/blockchain.js
+ *
+ * Functions:
+ *   registerDoctor(address, string, string, string, string)
+ *   verifyDoctor(address)
+ *   revokeDoctor(address, string)
+ *   isVerified(address) → bool
+ *   getDoctorStatus(address) → uint8
  */
-contract DoctorRegistry is AccessControl, Pausable {
-    // ── Roles ──────────────────────────────────────────────────────────────
-    bytes32 public constant VERIFIER_ROLE = keccak256("VERIFIER_ROLE");
-    bytes32 public constant PAUSER_ROLE   = keccak256("PAUSER_ROLE");
+contract DoctorRegistry {
 
-    // ── Data structures ────────────────────────────────────────────────────
-    enum DoctorStatus { NotRegistered, Pending, Verified, Revoked }
+    // ── Roles ─────────────────────────────────────────────────────────────────
+
+    address public owner;
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner");
+        _;
+    }
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    // ── Status enum ───────────────────────────────────────────────────────────
+
+    // 0 = None (not registered)
+    // 1 = Registered (pending verification)
+    // 2 = Verified
+    // 3 = Revoked
+
+    // ── Structs ───────────────────────────────────────────────────────────────
 
     struct Doctor {
-        string      name;
-        string      specialty;
-        string      licenseNumber;      // raw string for UI display
-        bytes32     licenseHash;        // keccak256(licenseNumber) stored on-chain
-        address     wallet;
-        uint256     registeredAt;
-        uint256     verifiedAt;         // 0 if not yet verified
-        DoctorStatus status;
-        string      mongoId;            // MongoDB _id for back-reference
+        address wallet;
+        string  name;
+        string  specialty;
+        string  licenseNumber;
+        string  mongoId;        // MongoDB _id as string
+        uint8   status;         // 0 none | 1 registered | 2 verified | 3 revoked
+        uint256 registeredAt;
+        uint256 verifiedAt;
+        string  revokeReason;
     }
 
-    // wallet → Doctor
+    // ── State ─────────────────────────────────────────────────────────────────
+
     mapping(address => Doctor) private _doctors;
+    address[] private _doctorList;
 
-    // licenseHash → already registered? (prevent duplicates)
-    mapping(bytes32 => bool) private _licenseRegistered;
+    // ── Events ────────────────────────────────────────────────────────────────
 
-    // mongoId → wallet (for backend lookups)
-    mapping(string => address) private _mongoIdToWallet;
+    event DoctorRegistered(address indexed wallet, string name, string licenseNumber, uint256 at);
+    event DoctorVerified(address indexed wallet, uint256 at);
+    event DoctorRevoked(address indexed wallet, string reason, uint256 at);
 
-    // all registered wallets (for enumeration)
-    address[] private _allDoctors;
-
-    // ── Events ─────────────────────────────────────────────────────────────
-    event DoctorRegistered(
-        address indexed wallet,
-        string  name,
-        string  specialty,
-        bytes32 licenseHash,
-        string  mongoId
-    );
-
-    event DoctorVerified(
-        address indexed wallet,
-        address indexed verifiedBy,
-        uint256 timestamp
-    );
-
-    event DoctorRevoked(
-        address indexed wallet,
-        address indexed revokedBy,
-        string  reason
-    );
-
-    event DoctorUpdated(
-        address indexed wallet,
-        string  field
-    );
-
-    // ── Constructor ────────────────────────────────────────────────────────
-    constructor(address admin) {
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(VERIFIER_ROLE,      admin);
-        _grantRole(PAUSER_ROLE,        admin);
-    }
-
-    // ── Registration (called by backend on doctor signup) ──────────────────
+    // ── Functions ─────────────────────────────────────────────────────────────
 
     /**
-     * @notice Register a new doctor. Status starts as Pending until verified.
-     * @param wallet        Doctor's MetaMask wallet
-     * @param name          Full name
-     * @param specialty     Medical specialty
-     * @param licenseNumber Raw license number string
-     * @param mongoId       MongoDB _id of the doctor's User document
+     * @notice Register a doctor on-chain. Called by backend after MongoDB verification.
+     * @param wallet        doctor's Ethereum wallet address
+     * @param name          doctor's full name
+     * @param specialty     medical specialty
+     * @param licenseNumber medical council license number
+     * @param mongoId       MongoDB _id string for cross-referencing
      */
     function registerDoctor(
-        address wallet,
-        string  calldata name,
-        string  calldata specialty,
-        string  calldata licenseNumber,
-        string  calldata mongoId
-    ) external onlyRole(VERIFIER_ROLE) whenNotPaused {
-        require(wallet != address(0),                           "DoctorRegistry: zero address");
-        require(_doctors[wallet].status == DoctorStatus.NotRegistered,
-                                                                "DoctorRegistry: already registered");
-        require(bytes(name).length > 0,                         "DoctorRegistry: empty name");
-        require(bytes(licenseNumber).length > 0,                "DoctorRegistry: empty license");
-
-        bytes32 licenseHash = keccak256(bytes(licenseNumber));
-        require(!_licenseRegistered[licenseHash],               "DoctorRegistry: license already registered");
-
-        _licenseRegistered[licenseHash] = true;
-        _mongoIdToWallet[mongoId]       = wallet;
-        _allDoctors.push(wallet);
+        address         wallet,
+        string calldata name,
+        string calldata specialty,
+        string calldata licenseNumber,
+        string calldata mongoId
+    ) external onlyOwner {
+        require(wallet != address(0),              "Invalid wallet");
+        require(bytes(name).length > 0,            "Empty name");
+        require(bytes(licenseNumber).length > 0,   "Empty licenseNumber");
+        require(_doctors[wallet].status == 0,      "Already registered");
 
         _doctors[wallet] = Doctor({
+            wallet:        wallet,
             name:          name,
             specialty:     specialty,
             licenseNumber: licenseNumber,
-            licenseHash:   licenseHash,
-            wallet:        wallet,
+            mongoId:       mongoId,
+            status:        1,
             registeredAt:  block.timestamp,
             verifiedAt:    0,
-            status:        DoctorStatus.Pending,
-            mongoId:       mongoId
+            revokeReason:  ""
         });
 
-        emit DoctorRegistered(wallet, name, specialty, licenseHash, mongoId);
+        _doctorList.push(wallet);
+
+        emit DoctorRegistered(wallet, name, licenseNumber, block.timestamp);
     }
 
-    // ── Verification ───────────────────────────────────────────────────────
-
     /**
-     * @notice Verify a pending doctor (hospital admin action).
+     * @notice Verify a registered doctor. Sets status to 2 (Verified).
      */
-    function verifyDoctor(address wallet)
-        external
-        onlyRole(VERIFIER_ROLE)
-        whenNotPaused
-    {
-        require(_doctors[wallet].status == DoctorStatus.Pending,
-                "DoctorRegistry: not in Pending state");
-
-        _doctors[wallet].status     = DoctorStatus.Verified;
+    function verifyDoctor(address wallet) external onlyOwner {
+        require(_doctors[wallet].status == 1, "Doctor not registered or already processed");
+        _doctors[wallet].status     = 2;
         _doctors[wallet].verifiedAt = block.timestamp;
-
-        emit DoctorVerified(wallet, msg.sender, block.timestamp);
+        emit DoctorVerified(wallet, block.timestamp);
     }
 
     /**
-     * @notice Revoke a doctor's verification (license expired, misconduct, etc.).
+     * @notice Revoke a doctor's verification. Permanent and auditable.
+     * @param reason Human-readable reason (stored on-chain forever)
      */
-    function revokeDoctor(address wallet, string calldata reason)
-        external
-        onlyRole(VERIFIER_ROLE)
-        whenNotPaused
-    {
-        require(
-            _doctors[wallet].status == DoctorStatus.Verified ||
-            _doctors[wallet].status == DoctorStatus.Pending,
-            "DoctorRegistry: not registered"
-        );
-
-        _doctors[wallet].status = DoctorStatus.Revoked;
-        emit DoctorRevoked(wallet, msg.sender, reason);
+    function revokeDoctor(address wallet, string calldata reason) external onlyOwner {
+        require(_doctors[wallet].status == 2, "Doctor not verified");
+        _doctors[wallet].status       = 3;
+        _doctors[wallet].revokeReason = reason;
+        emit DoctorRevoked(wallet, reason, block.timestamp);
     }
-
-    // ── Update ─────────────────────────────────────────────────────────────
 
     /**
-     * @notice Update a doctor's specialty (e.g., after further certification).
+     * @notice Check if a doctor's wallet is currently verified.
+     * @return true only if status == 2 (Verified)
      */
-    function updateSpecialty(address wallet, string calldata specialty)
-        external
-        onlyRole(VERIFIER_ROLE)
-        whenNotPaused
-    {
-        require(_doctors[wallet].status != DoctorStatus.NotRegistered,
-                "DoctorRegistry: not registered");
-        _doctors[wallet].specialty = specialty;
-        emit DoctorUpdated(wallet, "specialty");
-    }
-
-    // ── Read ───────────────────────────────────────────────────────────────
-
-    /// @notice Full doctor struct for a wallet.
-    function getDoctor(address wallet)
-        external
-        view
-        returns (Doctor memory)
-    {
-        return _doctors[wallet];
-    }
-
-    /// @notice Quick verified check — used by AppointmentToken before minting.
     function isVerified(address wallet) external view returns (bool) {
-        return _doctors[wallet].status == DoctorStatus.Verified;
+        return _doctors[wallet].status == 2;
     }
 
-    /// @notice Check status as uint (0=NotReg,1=Pending,2=Verified,3=Revoked).
-    function getDoctorStatus(address wallet) external view returns (DoctorStatus) {
+    /**
+     * @notice Get raw status code for a wallet.
+     * @return 0 = not registered, 1 = registered, 2 = verified, 3 = revoked
+     */
+    function getDoctorStatus(address wallet) external view returns (uint8) {
         return _doctors[wallet].status;
     }
 
-    /// @notice Verify a license hash directly (without knowing the wallet).
-    function verifyLicenseHash(bytes32 licenseHash) external view returns (bool) {
-        return _licenseRegistered[licenseHash];
+    /**
+     * @notice Get full doctor record (owner/admin use).
+     */
+    function getDoctor(address wallet) external view onlyOwner returns (Doctor memory) {
+        return _doctors[wallet];
     }
 
-    /// @notice Look up a wallet from a MongoDB doctor ID.
-    function getWalletByMongoId(string calldata mongoId)
-        external
-        view
-        returns (address)
-    {
-        return _mongoIdToWallet[mongoId];
+    /**
+     * @notice Total number of registered doctors.
+     */
+    function doctorCount() external view returns (uint256) {
+        return _doctorList.length;
     }
-
-    /// @notice Total registered doctors (including revoked).
-    function totalDoctors() external view returns (uint256) {
-        return _allDoctors.length;
-    }
-
-    /// @notice Get wallet at index (for off-chain enumeration).
-    function getDoctorAtIndex(uint256 index) external view returns (address) {
-        require(index < _allDoctors.length, "DoctorRegistry: index out of bounds");
-        return _allDoctors[index];
-    }
-
-    // ── Admin ──────────────────────────────────────────────────────────────
-    function pause()   external onlyRole(PAUSER_ROLE) { _pause(); }
-    function unpause() external onlyRole(PAUSER_ROLE) { _unpause(); }
 }

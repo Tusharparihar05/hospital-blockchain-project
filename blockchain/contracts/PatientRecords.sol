@@ -1,81 +1,74 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/utils/Pausable.sol";
-
 /**
  * @title PatientRecords
- * @notice Stores tamper-proof keccak256 hashes of medical records on-chain.
- *         The actual files live in MongoDB/IPFS; this contract proves they
- *         haven't been altered since upload.
+ * @notice Anchors keccak256 file hashes on-chain for tamper-proof medical record integrity.
+ *         Files themselves live on IPFS — only the hash is stored here.
+ *
+ * ABI consumed by backend/routes/blockchain.js and backend/routes/records.js
+ *
+ * Functions:
+ *   anchorRecord(uint256, bytes32, string, string)
+ *   verifyRecord(uint256, bytes32) → (bool valid, uint256 recordIndex)
+ *   recordCount(uint256) → uint256
+ *   isAnchored(bytes32) → bool
+ *   getRecord(uint256, uint256) → (bytes32, string, string, uint256, address, bool)
  */
-contract PatientRecords is AccessControl, Pausable {
-    // ── Roles ──────────────────────────────────────────────────────────────
-    bytes32 public constant WRITER_ROLE = keccak256("WRITER_ROLE");
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+contract PatientRecords {
 
-    // ── Data structures ────────────────────────────────────────────────────
+    // ── Structs ───────────────────────────────────────────────────────────────
+
     struct Record {
-        bytes32  fileHash;       // keccak256 of raw file bytes
-        string   category;       // "lab_report" | "prescription" | "scan" …
-        string   fileName;       // original file name (metadata only)
-        uint256  timestamp;      // block.timestamp when anchored
-        address  uploadedBy;     // backend wallet or patient wallet
+        bytes32  fileHash;
+        string   category;
+        string   fileName;
+        uint256  timestamp;
+        address  uploadedBy;
         bool     exists;
     }
 
-    // patientId (numeric, set at signup) → array of records
-    mapping(uint256 => Record[]) private _records;
+    // ── State ─────────────────────────────────────────────────────────────────
 
-    // global hash → already anchored? (prevents duplicate anchoring)
-    mapping(bytes32 => bool) private _hashAnchored;
+    // patientId → ordered list of records
+    mapping(uint256 => Record[]) private _patientRecords;
 
-    // ── Events ─────────────────────────────────────────────────────────────
+    // fileHash → already anchored (prevents duplicate gas spend)
+    mapping(bytes32 => bool) private _anchored;
+
+    // ── Events ────────────────────────────────────────────────────────────────
+
     event RecordAnchored(
         uint256 indexed patientId,
         bytes32 indexed fileHash,
         string  category,
         string  fileName,
-        uint256 timestamp,
-        address uploadedBy
+        address uploadedBy,
+        uint256 timestamp
     );
 
-    event RecordRevoked(
-        uint256 indexed patientId,
-        uint256 indexed recordIndex,
-        bytes32 fileHash
-    );
-
-    // ── Constructor ────────────────────────────────────────────────────────
-    constructor(address admin) {
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(WRITER_ROLE,        admin);
-        _grantRole(PAUSER_ROLE,        admin);
-    }
-
-    // ── Write ──────────────────────────────────────────────────────────────
+    // ── Core Functions ────────────────────────────────────────────────────────
 
     /**
-     * @notice Anchor a medical record hash on-chain.
-     * @param patientId   Numeric patient ID (stored in MongoDB User.chainPatientId)
-     * @param fileHash    keccak256 hash of the file bytes
-     * @param category    Category string (e.g. "lab_report")
-     * @param fileName    Original filename for reference
+     * @notice Anchor a file hash on-chain for a patient.
+     * @param patientId      Numeric patient ID (chainPatientId from MongoDB)
+     * @param fileHash       keccak256 hash of the raw file buffer
+     * @param category       e.g. "Blood Test", "X-Ray", "Prescription"
+     * @param fileName       original file name for display
      */
     function anchorRecord(
         uint256 patientId,
         bytes32 fileHash,
-        string  calldata category,
-        string  calldata fileName
-    ) external onlyRole(WRITER_ROLE) whenNotPaused {
-        require(fileHash != bytes32(0),      "PatientRecords: empty hash");
-        require(!_hashAnchored[fileHash],    "PatientRecords: hash already anchored");
-        require(patientId != 0,             "PatientRecords: invalid patientId");
+        string calldata category,
+        string calldata fileName
+    ) external {
+        require(patientId > 0,          "Invalid patientId");
+        require(fileHash != bytes32(0), "Empty fileHash");
+        require(!_anchored[fileHash],   "Already anchored");
 
-        _hashAnchored[fileHash] = true;
+        _anchored[fileHash] = true;
 
-        _records[patientId].push(Record({
+        _patientRecords[patientId].push(Record({
             fileHash:   fileHash,
             category:   category,
             fileName:   fileName,
@@ -84,84 +77,57 @@ contract PatientRecords is AccessControl, Pausable {
             exists:     true
         }));
 
-        emit RecordAnchored(
-            patientId,
-            fileHash,
-            category,
-            fileName,
-            block.timestamp,
-            msg.sender
-        );
+        emit RecordAnchored(patientId, fileHash, category, fileName, msg.sender, block.timestamp);
     }
 
     /**
-     * @notice Soft-revoke a record (marks exists = false, does NOT delete hash).
-     *         Useful for GDPR "right to erasure" — the hash stays but is
-     *         flagged as revoked so UIs can hide it.
+     * @notice Verify that a file hash was anchored for a given patient.
+     * @return valid       true if found
+     * @return recordIndex position in the patient's record array
      */
-    function revokeRecord(uint256 patientId, uint256 recordIndex)
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-        whenNotPaused
-    {
-        require(recordIndex < _records[patientId].length, "PatientRecords: index out of bounds");
-        Record storage rec = _records[patientId][recordIndex];
-        require(rec.exists, "PatientRecords: already revoked");
-
-        rec.exists = false;
-        emit RecordRevoked(patientId, recordIndex, rec.fileHash);
-    }
-
-    // ── Read ───────────────────────────────────────────────────────────────
-
-    /**
-     * @notice Verify whether a given hash is anchored and not revoked.
-     * @return valid      true if the hash exists and is not revoked
-     * @return patientId  0 if not found (caller must pass known patientId)
-     */
-    function verifyRecord(uint256 patientId, bytes32 fileHash)
-        external
-        view
-        returns (bool valid, uint256 recordIndex)
-    {
-        Record[] storage recs = _records[patientId];
-        for (uint256 i = 0; i < recs.length; i++) {
-            if (recs[i].fileHash == fileHash && recs[i].exists) {
+    function verifyRecord(
+        uint256 patientId,
+        bytes32 fileHash
+    ) external view returns (bool valid, uint256 recordIndex) {
+        Record[] storage records = _patientRecords[patientId];
+        for (uint256 i = 0; i < records.length; i++) {
+            if (records[i].fileHash == fileHash) {
                 return (true, i);
             }
         }
         return (false, 0);
     }
 
-    /// @notice Get a single record by patient + index.
-    function getRecord(uint256 patientId, uint256 index)
-        external
-        view
-        returns (
-            bytes32 fileHash,
-            string memory category,
-            string memory fileName,
-            uint256 timestamp,
-            address uploadedBy,
-            bool    exists
-        )
-    {
-        require(index < _records[patientId].length, "PatientRecords: index out of bounds");
-        Record storage r = _records[patientId][index];
+    /**
+     * @notice Total records anchored for a patient.
+     */
+    function recordCount(uint256 patientId) external view returns (uint256) {
+        return _patientRecords[patientId].length;
+    }
+
+    /**
+     * @notice Quick global check — is this hash anchored at all?
+     */
+    function isAnchored(bytes32 fileHash) external view returns (bool) {
+        return _anchored[fileHash];
+    }
+
+    /**
+     * @notice Retrieve a specific record by patient + index.
+     */
+    function getRecord(
+        uint256 patientId,
+        uint256 index
+    ) external view returns (
+        bytes32 fileHash,
+        string  memory category,
+        string  memory fileName,
+        uint256 timestamp,
+        address uploadedBy,
+        bool    exists
+    ) {
+        require(index < _patientRecords[patientId].length, "Index out of bounds");
+        Record storage r = _patientRecords[patientId][index];
         return (r.fileHash, r.category, r.fileName, r.timestamp, r.uploadedBy, r.exists);
     }
-
-    /// @notice Get total record count for a patient (includes revoked).
-    function recordCount(uint256 patientId) external view returns (uint256) {
-        return _records[patientId].length;
-    }
-
-    /// @notice Quick existence check without knowing the patient.
-    function isAnchored(bytes32 fileHash) external view returns (bool) {
-        return _hashAnchored[fileHash];
-    }
-
-    // ── Admin ──────────────────────────────────────────────────────────────
-    function pause()   external onlyRole(PAUSER_ROLE) { _pause(); }
-    function unpause() external onlyRole(PAUSER_ROLE) { _unpause(); }
 }

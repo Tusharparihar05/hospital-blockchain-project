@@ -367,6 +367,30 @@
           "Your record is listed in the doctor portal"
         ]
       }
+    },
+    {
+      "id": "REC-8F04",
+      "patientId": "HLT-0x224DDD",
+      "fileName": "git_4.png",
+      "category": "Other",
+      "uploadDate": "2026-03-29",
+      "doctor": "Self Upload",
+      "dept": "General",
+      "hash": "0xbad536de1fe5644d5730085afcbc3446e18f2a9a30182cf00fe8b2591b44dca8",
+      "blockchainHash": "0xbad536de1fe5644d5730085afcbc3446e18f2a9a30182cf00fe8b2591b44dca8",
+      "aiSummary": {
+        "keyFindings": [
+          "Document received and stored",
+          "Hash generated for blockchain anchoring",
+          "Awaiting doctor review"
+        ],
+        "plainLanguage": "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
+        "recommendedSteps": [
+          "Wait for doctor to review",
+          "Check back for AI analysis",
+          "Your record is listed in the doctor portal"
+        ]
+      }
     }
   ],
   "appointments": [],
