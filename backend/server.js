@@ -1,370 +1,616 @@
-// ─────────────────────────────────────────────────────────────────────────────
-//  backend/server.js
-//  MediChain — MongoDB-backed server. Replaces the old in-memory version.
-//  All data lives in MongoDB Atlas. Routes are in the /routes folder.
-// ─────────────────────────────────────────────────────────────────────────────
 require("dotenv").config();
-
+const mongoose = require("mongoose");
 const express  = require("express");
 const cors     = require("cors");
-const mongoose = require("mongoose");
+const multer   = require("multer");
+const bcrypt   = require("bcryptjs");
 
-const app = express();
+const app    = express();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
-
-const app = express();
-
-// MongoDB connection
 const mongoUri = process.env.MONGODB_URI;
-if (!mongoUri) {
-  console.error("❌ MONGODB_URI not set in .env file");
-  process.exit(1);
-}
+if (!mongoUri) { console.error("❌ MONGODB_URI not set in .env"); process.exit(1); }
 
-mongoose.connect(mongoUri, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-  .then(() => {
-    console.log("✅ MongoDB connected");
-    startServer();
-  })
-  .catch((err) => {
-    console.error("❌ MongoDB connection error:", err.message);
-    process.exit(1);
-  });
+mongoose.connect(mongoUri)
+  .then(() => { console.log("✅ MongoDB connected"); startServer(); })
+  .catch(err => { console.error("❌ MongoDB error:", err.message); process.exit(1); });
 
+// ══════════════════════════════════════════════════════════════════════════════
+// MONGOOSE SCHEMAS
+// ══════════════════════════════════════════════════════════════════════════════
+
+const userSchema = new mongoose.Schema({
+  name:            { type: String, required: true, trim: true },
+  email:           { type: String, required: true, unique: true, lowercase: true, trim: true },
+  passwordHash:    { type: String, required: true },
+  role:            { type: String, enum: ["patient", "doctor", "admin"], default: "patient" },
+  phone:           { type: String, default: "" },
+  patientId:       { type: String },
+  chainPatientId:  { type: Number },
+  gender:          { type: String, enum: ["Male", "Female", "Other", ""], default: "" },
+  bloodGroup:      { type: String, default: "" },
+  specialty:       { type: String, default: "" },
+  licenseNumber:   { type: String, default: "" },
+  licenseVerified: { type: Boolean, default: false },
+  hospital:        { type: String, default: "" },
+  experience:      { type: Number, default: 0 },
+  fee:             { type: Number, default: 500 },
+  rating:          { type: Number, default: 0 },
+  reviewCount:     { type: Number, default: 0 },
+  bio:             { type: String, default: "" },
+  education:       { type: String, default: "" },
+  languages:       [String],
+  tags:            [String],
+  availability:    [String],
+  status:          { type: String, enum: ["online", "busy", "offline"], default: "online" },
+  walletAddress:   { type: String, default: "" },
+  isActive:        { type: Boolean, default: true },
+  lastLogin:       { type: Date },
+}, { timestamps: true });
+
+userSchema.index({ role: 1, isActive: 1 });
+// FIX: sparse but NOT unique here — the separate User model file sets unique,
+// having it in both places caused duplicate-key errors on non-patient accounts
+// whose patientId is undefined (two undefineds = duplicate key violation).
+userSchema.index({ patientId: 1 }, { sparse: true });
+
+userSchema.pre("save", async function () {
+  if (this.isModified("passwordHash")) {
+    this.passwordHash = await bcrypt.hash(this.passwordHash, 12);
+  }
+  if (this.role === "patient" && !this.patientId) {
+    const hex = Math.floor(Math.random() * 0xFFFFFF).toString(16).toUpperCase().padStart(6, "0");
+    this.patientId      = "HLT-0x" + hex;
+    this.chainPatientId = parseInt(hex, 16) % 900000 + 100000;
+  }
+});
+
+userSchema.methods.comparePassword = function (plain) {
+  return bcrypt.compare(plain, this.passwordHash);
+};
+
+const User = mongoose.model("User", userSchema);
+
+// ── Health Record ─────────────────────────────────────────────────────────────
+const recordSchema = new mongoose.Schema({
+  patientId:       { type: String, required: true, index: true },
+  fileName:        { type: String, default: "" },
+  category:        { type: String, default: "General" },
+  uploadDate:      { type: String, default: () => new Date().toISOString().slice(0, 10) },
+  doctor:          { type: String, default: "Self Upload" },
+  dept:            { type: String, default: "" },
+  hash:            { type: String, default: "" },
+  blockchainHash:  { type: String, default: "" },
+  ipfsUrl:         { type: String, default: "" },
+  anchoredOnChain: { type: Boolean, default: false },
+  aiSummary:       { type: mongoose.Schema.Types.Mixed, default: null },
+}, { timestamps: true });
+
+const Record = mongoose.model("Record", recordSchema);
+
+// ── Appointment ───────────────────────────────────────────────────────────────
+const appointmentSchema = new mongoose.Schema({
+  patientId:     { type: String, required: true, index: true },
+  patientName:   { type: String, default: "" },
+  doctorId:      { type: String, default: "" },
+  doctorName:    { type: String, default: "" },
+  dept:          { type: String, default: "General" },
+  specialty:     { type: String, default: "" },
+  date:          { type: String, required: true },
+  time:          { type: String, required: true },
+  type:          { type: String, default: "Consultation" },
+  isEmergency:   { type: Boolean, default: false },
+  status:        { type: String, default: "confirmed" },
+  fee:           { type: Number, default: 0 },
+  feePaid:       { type: Boolean, default: false },
+  paymentMethod: { type: String, default: "" },
+  tokenId:       { type: String, default: "" },
+  blockchain:    { type: String, default: "" },
+  notes:         { type: String, default: "" },
+  age:           { type: Number },
+  gender:        { type: String, default: "" },
+  phone:         { type: String, default: "" },
+}, { timestamps: true });
+
+const Appointment = mongoose.model("Appointment", appointmentSchema);
+
+// ── Doctor Licence Verification ───────────────────────────────────────────────
+const licenceSchema = new mongoose.Schema({
+  email:         { type: String, required: true, index: true },
+  licenseNumber: { type: String, required: true },
+  documentHash:  { type: String, default: "" },
+  status:        { type: String, enum: ["verified", "rejected", "pending"], default: "pending" },
+  issuer:        { type: String, default: "MediChain Demo Verifier" },
+  verifiedAt:    { type: Date },
+  note:          { type: String, default: "" },
+}, { timestamps: true });
+
+const LicenceVerification = mongoose.model("LicenceVerification", licenceSchema);
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SERVER
+// ══════════════════════════════════════════════════════════════════════════════
 function startServer() {
+  app.use(cors());
+  app.use(express.json());
 
-const STORE_FILE = path.join(__dirname, "medichain-store.json");
-let persistTimer = null;
-function persistState() {
-  clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
+  function randomHex(len = 8) {
+    return [...Array(len)].map(() => Math.floor(Math.random() * 16).toString(16)).join("").toUpperCase();
+  }
+  function generateToken() { return `token_${randomHex(16)}`; }
+
+  app.get("/", (req, res) => res.json({ status: "ok", message: "MediChain Backend Running" }));
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // AUTH
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.post("/api/auth/signup", async (req, res) => {
     try {
-      fs.writeFileSync(
-        STORE_FILE,
-        JSON.stringify({ records, appointments, doctorLicenseVerifications }, null, 2)
-      );
-    } catch (e) {
-      console.error("persistState:", e.message);
+      const { name, email, password, phone, role, walletAddress, specialty, licenseNumber, hospital, experience, fee, bio, education, languages, availability } = req.body;
+      if (!name || !email || !password)
+        return res.status(400).json({ error: "name, email and password are required" });
+
+      const existing = await User.findOne({ email: email.toLowerCase().trim() });
+      if (existing) return res.status(409).json({ error: "Email already registered" });
+
+      const newUser = new User({
+        name:          name.trim(),
+        email:         email.toLowerCase().trim(),
+        passwordHash:  password,
+        role:          role || "patient",
+        phone:         phone || "",
+        walletAddress: walletAddress || "",
+        specialty:     specialty || "",
+        licenseNumber: licenseNumber || "",
+        hospital:      hospital || "",
+        experience:    experience ? Number(experience) : 0,
+        fee:           fee ? Number(fee) : 500,
+        bio:           bio || "",
+        education:     education || "",
+        languages:     Array.isArray(languages) ? languages : (languages ? [languages] : []),
+        availability:  Array.isArray(availability) ? availability : [],
+        status:        "online",
+        isActive:      true,
+      });
+
+      await newUser.save();
+      const token = generateToken();
+
+      return res.status(201).json({
+        message: "Account created successfully",
+        token,
+        user: {
+          id:             newUser._id,
+          name:           newUser.name,
+          email:          newUser.email,
+          role:           newUser.role,
+          patientId:      newUser.patientId || null,
+          chainPatientId: newUser.chainPatientId || null,
+          walletAddress:  newUser.walletAddress,
+          specialty:      newUser.specialty,
+          licenseNumber:  newUser.licenseNumber,
+          hospital:       newUser.hospital,
+        },
+      });
+    } catch (err) {
+      console.error("signup error:", err);
+      res.status(500).json({ error: err.message });
     }
-  }, 400);
-}
-function loadState() {
-  try {
-    const raw = fs.readFileSync(STORE_FILE, "utf8");
-    const d = JSON.parse(raw);
-    if (Array.isArray(d.records)) records.splice(0, records.length, ...d.records);
-    if (Array.isArray(d.appointments)) appointments.splice(0, appointments.length, ...d.appointments);
-    if (Array.isArray(d.doctorLicenseVerifications)) {
-      doctorLicenseVerifications.splice(0, doctorLicenseVerifications.length, ...d.doctorLicenseVerifications);
+  });
+
+  // FIX: validate role in login so a patient cannot log in on the doctor form
+  app.post("/api/auth/login", async (req, res) => {
+    try {
+      const { email, password, role } = req.body;
+      if (!email || !password) return res.status(400).json({ error: "email and password are required" });
+
+      const query = { email: email.toLowerCase().trim(), isActive: true };
+      // Only filter by role if the client sends one — keeps the endpoint flexible
+      if (role && ["patient", "doctor", "admin"].includes(role)) query.role = role;
+
+      const user = await User.findOne(query);
+      if (!user) return res.status(401).json({ error: "Invalid email or password" });
+
+      const ok = await user.comparePassword(password);
+      if (!ok) return res.status(401).json({ error: "Invalid email or password" });
+
+      user.lastLogin = new Date();
+      await user.save();
+
+      const token = generateToken();
+      return res.json({
+        message: "Login successful",
+        token,
+        user: {
+          id:             user._id,
+          name:           user.name,
+          email:          user.email,
+          role:           user.role,
+          patientId:      user.patientId || null,
+          chainPatientId: user.chainPatientId || null,
+          walletAddress:  user.walletAddress,
+          specialty:      user.specialty,
+          licenseNumber:  user.licenseNumber,
+          hospital:       user.hospital,
+          experience:     user.experience,
+          fee:            user.fee,
+          bio:            user.bio,
+          education:      user.education,
+          languages:      user.languages,
+          availability:   user.availability,
+          status:         user.status,
+        },
+      });
+    } catch (err) {
+      console.error("login error:", err);
+      res.status(500).json({ error: err.message });
     }
-  } catch (_) { /* no file yet */ }
+  });
+
+  app.post("/api/auth/wallet-login", async (req, res) => {
+    try {
+      const { walletAddress } = req.body;
+      if (!walletAddress) return res.status(400).json({ error: "walletAddress is required" });
+      const user = await User.findOne({ walletAddress: { $regex: new RegExp(`^${walletAddress}$`, "i") }, isActive: true });
+      if (!user) return res.status(404).json({ error: "No account found for this wallet" });
+      const token = generateToken();
+      return res.json({
+        message: "Wallet login successful", token,
+        user: { id: user._id, name: user.name, email: user.email, role: user.role, patientId: user.patientId, chainPatientId: user.chainPatientId, walletAddress: user.walletAddress, specialty: user.specialty, licenseNumber: user.licenseNumber },
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PATIENTS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.get("/api/patients", async (req, res) => {
+    try {
+      const patients = await User.find({ role: "patient", isActive: true })
+        .select("name email phone patientId chainPatientId gender bloodGroup createdAt")
+        .lean();
+
+      const result = patients.map(p => ({
+        id:     p.patientId || String(p._id),
+        name:   p.name,
+        email:  p.email,
+        phone:  p.phone || "",
+        gender: p.gender || "Unknown",
+        blood:  p.bloodGroup || "",
+        age:    p.age || 0,
+      }));
+      res.json(result);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/api/patients/:id", async (req, res) => {
+    try {
+      const patient = await User.findOne({
+        $or: [{ patientId: req.params.id }, { _id: mongoose.isValidObjectId(req.params.id) ? req.params.id : null }],
+        role: "patient",
+      }).lean();
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
+      res.json({ id: patient.patientId || String(patient._id), name: patient.name, phone: patient.phone, gender: patient.gender, age: patient.age || 0 });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // DOCTORS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.get("/api/doctors", async (req, res) => {
+    try {
+      const doctors = await User.find({ role: "doctor", isActive: true })
+        .select("-passwordHash -__v")
+        .lean();
+
+      const result = doctors.map(d => ({
+        id:           String(d._id),
+        name:         d.name,
+        email:        d.email,
+        specialty:    d.specialty || "General",
+        hospital:     d.hospital  || "",
+        experience:   d.experience || 0,
+        fee:          d.fee || 500,
+        rating:       d.rating || 0,
+        reviewCount:  d.reviewCount || 0,
+        bio:          d.bio || "",
+        education:    d.education || "",
+        languages:    d.languages || [],
+        tags:         d.tags || [],
+        availability: d.availability || [],
+        status:       d.status || "online",
+        image:        "👨‍⚕️",
+        available:    d.status !== "offline",
+        slots:        d.availability ? d.availability.length : 0,
+        reviews:      [],
+        conditions:   d.tags || [],
+        patients:     0,
+        todayAppts:   0,
+      }));
+      res.json(result);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/api/doctors/:id", async (req, res) => {
+    try {
+      const doctor = await User.findOne({ _id: req.params.id, role: "doctor" }).select("-passwordHash -__v").lean();
+      if (!doctor) return res.status(404).json({ error: "Doctor not found" });
+      res.json({ ...doctor, id: String(doctor._id) });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // APPOINTMENTS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.get("/api/appointments", async (req, res) => {
+    try {
+      const { patientId } = req.query;
+      const query = patientId ? { patientId } : {};
+      const appts = await Appointment.find(query).sort({ date: 1, time: 1 }).lean();
+      res.json(appts.map(a => ({ ...a, id: String(a._id) })));
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/appointments", async (req, res) => {
+    try {
+      const { patientId, doctorId, doctorName, dept, specialty, date, time, isEmergency, type, fee, feePaid, paymentMethod } = req.body;
+      if (!date || !time) return res.status(400).json({ error: "date and time are required" });
+      if (!patientId)     return res.status(400).json({ error: "patientId is required" });
+
+      const patientUser = await User.findOne({ patientId }).lean();
+      const doctorUser  = doctorId ? await User.findById(doctorId).lean() : null;
+
+      const tokenId = `APT-${randomHex(8)}`;
+      const appt = await Appointment.create({
+        patientId,
+        patientName:   patientUser?.name || "",
+        doctorId:      doctorId || "",
+        doctorName:    doctorName || doctorUser?.name || "",
+        dept:          dept || doctorUser?.specialty || "General",
+        specialty:     specialty || doctorUser?.specialty || "",
+        date, time, tokenId,
+        isEmergency:   !!isEmergency,
+        status:        "confirmed",
+        fee:           fee || doctorUser?.fee || 0,
+        feePaid:       !!feePaid,
+        paymentMethod: paymentMethod || "",
+        type:          type || "Consultation",
+        age:           patientUser?.age,
+        gender:        patientUser?.gender || "",
+        phone:         patientUser?.phone || "",
+        blockchain:    tokenId,
+      });
+
+      res.status(201).json({ message: "Appointment booked", appointment: { ...appt.toObject(), id: String(appt._id) }, tokenId, blockchain: tokenId });
+    } catch (err) {
+      console.error("appt create error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put("/api/appointments/:id/complete", async (req, res) => {
+    try {
+      const appt = await Appointment.findByIdAndUpdate(req.params.id, { status: "completed" }, { new: true });
+      if (!appt) return res.status(404).json({ error: "Appointment not found" });
+      res.json({ message: "Appointment completed", appointment: { ...appt.toObject(), id: String(appt._id) } });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.put("/api/appointments/:id/reschedule", async (req, res) => {
+    try {
+      const appt = await Appointment.findByIdAndUpdate(req.params.id, { status: "reschedule-requested" }, { new: true });
+      if (!appt) return res.status(404).json({ error: "Appointment not found" });
+      res.json({ message: "Reschedule requested", appointment: { ...appt.toObject(), id: String(appt._id) } });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // HEALTH RECORDS
+  // FIX: /api/records/file/:recordId MUST be registered BEFORE
+  //      /api/records/:patientId — otherwise Express matches "file" as a
+  //      patientId and the file-download route is never reached.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // GET /api/records  — all records (doctor view)
+  app.get("/api/records", async (req, res) => {
+    try {
+      const records = await Record.find().sort({ createdAt: -1 }).lean();
+      res.json(records.map(r => ({ ...r, id: String(r._id) })));
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // GET /api/records/file/:recordId  — MUST come before /api/records/:patientId
+  app.get("/api/records/file/:recordId", async (req, res) => {
+    try {
+      const record = await Record.findById(req.params.recordId).lean();
+      if (!record)         return res.status(404).json({ error: "Record not found" });
+      if (!record.ipfsUrl) return res.status(404).json({ error: "No file stored for this record" });
+
+      if (record.ipfsUrl.startsWith("data:")) {
+        const [header, b64] = record.ipfsUrl.split(",");
+        const mime = header.replace("data:", "").replace(";base64", "");
+        const buf  = Buffer.from(b64, "base64");
+        res.setHeader("Content-Type", mime);
+        res.setHeader("Content-Disposition", `inline; filename="${record.fileName}"`);
+        res.setHeader("Content-Length", buf.length);
+        return res.send(buf);
+      }
+      res.redirect(record.ipfsUrl);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // GET /api/records/:patientId  — comes AFTER the /file route
+  app.get("/api/records/:patientId", async (req, res) => {
+    try {
+      const records = await Record.find({ patientId: req.params.patientId }).sort({ createdAt: -1 }).lean();
+      res.json(records.map(r => ({ ...r, id: String(r._id) })));
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // POST /api/records  — JSON or multipart
+  app.post("/api/records", upload.single("file"), async (req, res) => {
+    try {
+      const body = req.body;
+      const file = req.file;
+
+      const patientId = body.patientId;
+      if (!patientId) return res.status(400).json({ error: "patientId is required" });
+
+      const category = body.category || body.type || "General";
+      const doctor   = body.doctor   || "Self Upload";
+      const dept     = body.dept     || category;
+      let   fileHash = body.fileHash || "";
+      let   fileName = body.fileName || "";
+      let   ipfsUrl  = "";
+
+      if (file) {
+        fileName = fileName || file.originalname || `Upload_${Date.now()}.pdf`;
+        fileHash = fileHash || `0x${Buffer.from(file.buffer).slice(0, 16).toString("hex")}`;
+        const mime = file.mimetype || "application/octet-stream";
+        ipfsUrl    = `data:${mime};base64,${file.buffer.toString("base64")}`;
+      } else {
+        fileName = fileName || `Report_${new Date().toISOString().slice(0, 10)}_${category.replace(/\s+/g, "_")}.pdf`;
+        fileHash = fileHash || `0x${randomHex(12)}`;
+        ipfsUrl  = body.ipfsUrl || "";
+      }
+
+      const aiSummary = {
+        keyFindings:      ["Document received and stored", "Hash generated for blockchain anchoring", "Awaiting doctor review"],
+        plainLanguage:    "Your document has been uploaded successfully. A cryptographic fingerprint has been anchored on the blockchain.",
+        recommendedSteps: ["Wait for doctor to review", "Check back for AI analysis", "Your record is now secured on-chain"],
+      };
+
+      const newRecord = await Record.create({
+        patientId, fileName, category,
+        uploadDate:      new Date().toISOString().slice(0, 10),
+        doctor, dept,
+        hash:            fileHash,
+        blockchainHash:  fileHash,
+        ipfsUrl,
+        anchoredOnChain: !!fileHash,
+        aiSummary,
+      });
+
+      res.status(201).json({
+        message:  "Record saved",
+        record:   { ...newRecord.toObject(), id: String(newRecord._id) },
+        ipfsHash: fileHash,
+        ipfsUrl,
+        aiSummary,
+      });
+    } catch (err) {
+      console.error("record save error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // DASHBOARD
+  // ══════════════════════════════════════════════════════════════════════════
+  app.get("/api/dashboard", async (req, res) => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const [totalPatients, totalRecords, todayAppts] = await Promise.all([
+        User.countDocuments({ role: "patient", isActive: true }),
+        Record.countDocuments(),
+        Appointment.countDocuments({ date: today }),
+      ]);
+      res.json({ totalPatients, appointmentsToday: todayAppts, onChainRecords: totalRecords });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // EMERGENCY
+  // ══════════════════════════════════════════════════════════════════════════
+  app.post("/api/emergency", async (req, res) => {
+    try {
+      const { patientId, lat, lng } = req.body;
+      if (!patientId) return res.status(400).json({ error: "patientId is required" });
+      const patient = await User.findOne({ patientId }).lean();
+      if (!patient)   return res.status(404).json({ error: "Patient not found" });
+      const emergencyToken = `EMR-${randomHex(8)}`;
+      res.status(201).json({
+        message: "Emergency protocol activated", emergencyToken,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        patient:  { id: patient.patientId, name: patient.name, blood: patient.bloodGroup, age: patient.age },
+        location: lat && lng ? { lat, lng } : null,
+        nearbyHospital: { name: "City Hospital", distanceKm: 1.2, etaMinutes: 8 },
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // DOCTOR LICENCE VERIFICATION
+  // ══════════════════════════════════════════════════════════════════════════
+  app.post("/api/verification/doctor-license", async (req, res) => {
+    try {
+      const { email, licenseNumber, documentHash } = req.body;
+      if (!email || !licenseNumber)
+        return res.status(400).json({ error: "email and licenseNumber are required" });
+
+      const clean    = String(licenseNumber).replace(/\s/g, "");
+      const formatOk = /^[A-Z0-9-]{6,24}$/i.test(clean);
+
+      const entry = await LicenceVerification.create({
+        email:         email.toLowerCase().trim(),
+        licenseNumber: clean,
+        documentHash:  documentHash || "",
+        status:        formatOk ? "verified" : "rejected",
+        verifiedAt:    formatOk ? new Date() : null,
+        note:          formatOk
+          ? "Mock pass: in production call your institutional API."
+          : "License reference failed basic format check (6–24 alphanumeric chars).",
+      });
+
+      res.status(201).json({ ...entry.toObject(), id: String(entry._id) });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/api/verification/doctor-license", async (req, res) => {
+    try {
+      const email = req.query.email;
+      if (!email) return res.status(400).json({ error: "email query param required" });
+      const latest = await LicenceVerification.findOne({ email: email.toLowerCase().trim() }).sort({ createdAt: -1 }).lean();
+      if (!latest) return res.json({ status: "none", message: "No verification submitted yet." });
+      res.json({ ...latest, id: String(latest._id) });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // WALLET CONNECT
+  // ══════════════════════════════════════════════════════════════════════════
+  app.post("/api/wallet/connect", async (req, res) => {
+    try {
+      const { walletAddress } = req.body;
+      if (!walletAddress) return res.status(400).json({ error: "walletAddress required" });
+      const user = await User.findOne({ walletAddress: { $regex: new RegExp(`^${walletAddress}$`, "i") } }).lean();
+      res.json({
+        message: "Wallet connected", walletAddress,
+        patientId:   user?.patientId || null,
+        patientName: user?.name || null,
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.use((req, res) => res.status(404).json({ error: `Route ${req.method} ${req.path} not found` }));
+
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => {
+    console.log(`\nMediChain backend running on http://localhost:${PORT}\n`);
+    console.log("Routes:");
+    console.log("  POST /api/auth/signup | login | wallet-login");
+    console.log("  GET  /api/patients                   (real DB)");
+    console.log("  GET  /api/doctors                    (real DB)");
+    console.log("  GET  /api/appointments   POST /api/appointments");
+    console.log("  GET  /api/records/file/:id           (before /:patientId)");
+    console.log("  GET  /api/records/:patientId");
+    console.log("  POST /api/records");
+    console.log("  GET  /api/dashboard");
+    console.log("  POST /api/emergency");
+    console.log("  POST /api/verification/doctor-license");
+  });
 }
-
->>>>>>> Stashed changes
-app.use(cors());
-app.use(express.json());
-
-// ── Connect MongoDB ───────────────────────────────────────────────────────────
-mongoose
-  .connect(process.env.MONGODB_URI)
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch(err => {
-    console.error("❌ MongoDB connection failed:", err.message);
-    process.exit(1);
-  });
-
-// ── Health check ──────────────────────────────────────────────────────────────
-app.get("/", (req, res) => {
-  res.json({ status: "ok", message: "MediChain Blockchain Backend Running" });
-});
-
-    });
-
-    if (!patient) return res.status(404).json({ error: "Patient not found" });
-
-    const emergencyToken = `EMR-${Math.random().toString(16).slice(2, 10).toUpperCase()}`;
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-
-    res.status(201).json({
-      message: "Emergency protocol activated",
-      emergencyToken,
-      expiresAt,
-      patient: {
-        id:     patient.patientId,
-        name:   patient.name,
-        blood:  patient.bloodGroup || "Unknown",
-        age:    patient.dateOfBirth
-          ? Math.floor((Date.now() - new Date(patient.dateOfBirth)) / (1000 * 60 * 60 * 24 * 365))
-          : null,
-      },
-      location: lat && lng ? { lat, lng } : null,
-      nearbyHospital: { name: "City Hospital", distanceKm: 1.2, etaMinutes: 8 },
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Wallet connect ────────────────────────────────────────────────────────────
-app.post("/api/wallet/connect", async (req, res) => {
-  try {
-    const { walletAddress } = req.body;
-    if (!walletAddress) return res.status(400).json({ error: "walletAddress is required" });
-
-    const User = require("./models/User");
-    const user = await User.findOne({ walletAddress: { $regex: new RegExp(`^${walletAddress}$`, "i") } });
-    if (!user) return res.json({ message: "Wallet not linked to any account", walletAddress });
-
-    res.json({
-      message:     "Wallet connected",
-      walletAddress,
-      patientId:   user.patientId,
-      patientName: user.name,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-=======
-app.post("/api/auth/wallet-login", (req, res) => {
-  const { walletAddress } = req.body;
-  if (!walletAddress) return res.status(400).json({ error: "walletAddress is required" });
-  const user = users.find(u => u.walletAddress?.toLowerCase() === walletAddress.toLowerCase());
-  const token = generateToken();
-  if (user) {
-    return res.json({
-      message: "Wallet login successful", token,
-      user: {
-        id: user.id, name: user.name, email: user.email, role: user.role,
-        patientId: user.patientId, walletAddress: user.walletAddress,
-        specialty: user.specialty || "", licenseNumber: user.licenseNumber || "",
-        chainPatientId: user.chainPatientId ?? null,
-      },
-    });
-  }
-  // If user not found, create a new patient user (optional, or return error)
-  // For now, return error
-  return res.status(404).json({ error: "User not found for this wallet address" });
-
-// ─── Dashboard ────────────────────────────────────────────────────────────────
-
-app.get("/api/dashboard", (req, res) => {
-  res.json({
-    totalPatients: patients.length,
-    appointmentsToday: appointments.filter(a => a.date === new Date().toISOString().slice(0, 10)).length,
-    onChainRecords: records.length,
-    avgWaitMinutes: Math.round(queueData.reduce((s, d) => s + d.wait, 0) / queueData.length),
-    queueData,
-    recentPatients: patients.slice(0, 5),
-  });
-});
-
-// ─── Patients ─────────────────────────────────────────────────────────────────
-
-app.get("/api/patients", (req, res) => res.json(patients));
-app.get("/api/patients/:id", (req, res) => {
-  const patient = patients.find(p => p.id === req.params.id);
-  if (!patient) return res.status(404).json({ error: "Patient not found" });
-  res.json(patient);
-});
-app.post("/api/patients", (req, res) => {
-  const { name, age, blood, dept } = req.body;
-  if (!name || !age || !blood || !dept) return res.status(400).json({ error: "name, age, blood, and dept are required" });
-  const newPatient = { id: `HLT-0x${randomHex(6)}`, name, age: Number(age), blood, dept, status: "Waiting", queue: patients.length + 1 };
-  patients.push(newPatient);
-  res.status(201).json({ message: "Patient registered", patient: newPatient });
-});
-
-// ─── Doctors ──────────────────────────────────────────────────────────────────
-
-app.get("/api/doctors", (req, res) => res.json(doctors));
-app.get("/api/doctors/dept/:dept", (req, res) => {
-  const result = doctors.filter(d => d.dept.toLowerCase() === req.params.dept.toLowerCase());
-  res.json(result);
-});
-app.get("/api/doctors/:id", (req, res) => {
-  const doctor = doctors.find(d => d.id === req.params.id);
-  if (!doctor) return res.status(404).json({ error: "Doctor not found" });
-  res.json(doctor);
-});
-
-// ─── Appointments ─────────────────────────────────────────────────────────────
-
-app.get("/api/appointments", (req, res) => {
-  const { patientId } = req.query;
-  if (patientId) return res.json(appointments.filter(a => a.patientId === patientId));
-  res.json(appointments);
-});
-app.get("/api/appointments/:patientId", (req, res) => {
-  res.json(appointments.filter(a => a.patientId === req.params.patientId));
-});
-app.post("/api/appointments", (req, res) => {
-  const { patientId, dept, doctorName, doctorId, date, time, isEmergency } = req.body;
-  if (!patientId || !date || !time) return res.status(400).json({ error: "patientId, date, and time are required" });
-  const doctor = doctors.find(d => d.name === doctorName || d.id === doctorId);
-  if (doctor && doctor.slots > 0) { doctor.slots -= 1; if (doctor.slots === 0) doctor.available = false; }
-  const tokenId = `APT-${randomHex(8)}`;
-  const appointment = {
-    id: `APPT-${randomHex(6)}`, patientId, dept: dept || doctor?.dept || "General",
-    doctorName: doctorName || "TBD", doctorId: doctorId || doctor?.id || "DOC-001",
-    date, time, tokenId, isEmergency: isEmergency || false,
-    queuePosition: appointments.length + 1, status: "Confirmed", createdAt: new Date().toISOString(),
-  };
-  appointments.push(appointment);
-  persistState();
-  res.status(201).json({ message: "Appointment booked", appointment, tokenId });
-});
-app.put("/api/appointments/:id/complete", (req, res) => {
-  const appt = appointments.find(a => a.id === req.params.id);
-  if (!appt) return res.status(404).json({ error: "Appointment not found" });
-  appt.status = "Completed";
-  persistState();
-  res.json({ message: "Appointment completed", appointment: appt });
-});
-app.put("/api/appointments/:id/reschedule", (req, res) => {
-  const appt = appointments.find(a => a.id === req.params.id);
-  if (!appt) return res.status(404).json({ error: "Appointment not found" });
-  appt.status = "Reschedule Requested";
-  persistState();
-  res.json({ message: "Reschedule requested", appointment: appt });
-});
-
-// ─── Health Records ───────────────────────────────────────────────────────────
-
-app.get("/api/records", (req, res) => {
-  res.json(records);
-});
-
-app.get("/api/records/:patientId", (req, res) => {
-  const result = records.filter(r => r.patientId === req.params.patientId);
-  res.json(result);
-});
-
-app.post("/api/records", (req, res) => {
-  const { patientId, type, category, fileName, doctor, dept, fileHash } = req.body;
-  if (!patientId) return res.status(400).json({ error: "patientId is required" });
-  const ipfsHash = fileHash || `0x${randomHex(6)}${randomHex(6)}`;
-  const uploadAiSummary = {
-    keyFindings: ["Document received and stored", "Hash generated for blockchain anchoring", "Awaiting doctor review"],
-    plainLanguage: "Your document has been uploaded successfully. A cryptographic fingerprint has been created and can be anchored on the blockchain for tamper-proof verification.",
-    recommendedSteps: ["Wait for doctor to review", "Check back for AI analysis", "Your record is listed in the doctor portal"],
-  };
-  const newRecord = {
-    id: `REC-${randomHex(4)}`,
-    patientId,
-    // ✅ Support both old (type) and new (fileName/category) field names
-    fileName: fileName || type || "Uploaded Document",
-    category: category || type || "General",
-    uploadDate: new Date().toISOString().slice(0, 10),
-    doctor: doctor || "Self Upload",
-    dept: dept || "General",
-    hash: ipfsHash,
-    blockchainHash: fileHash || ipfsHash || "",
-    aiSummary: fileHash ? uploadAiSummary : null,
-  };
-  records.push(newRecord);
-  persistState();
-  res.status(201).json({ message: "Record saved", record: newRecord, ipfsHash, aiSummary: newRecord.aiSummary });
-});
-
-// ✅ FIXED: /api/records/upload now reads FormData fields properly and saves correct fields
-app.post("/api/records/upload", express.urlencoded({ extended: true }), (req, res) => {
-  // express.json() won't parse multipart, but urlencoded fields come through
-  // Frontend sends: category, patientId, fileHash via FormData (text fields)
-  const category   = req.body.category   || "General";
-  const patientId  = req.body.patientId  || "HLT-0x72A91B";
-  const fileHash   = req.body.fileHash   || `0x${randomHex(12)}`;
-  // File name won't come through without multer, so we generate one
-  const fileName   = `Report_${new Date().toISOString().slice(0, 10)}_${category.replace(/\s+/g, "_")}.pdf`;
-
-  const newRecord = {
-    id:             `REC-${randomHex(4)}`,
-    patientId,
-    fileName,
-    category,
-    uploadDate:     new Date().toISOString().slice(0, 10),  // ✅ correct field name
-    doctor:         "Self Upload",
-    dept:           "General",
-    hash:           fileHash,
-    blockchainHash: fileHash,
-    aiSummary: {
-      keyFindings:      ["Document received and stored", "Hash generated for blockchain anchoring", "Awaiting doctor review"],
-      plainLanguage:    "Your document has been uploaded successfully. A cryptographic fingerprint has been created and will be anchored on the blockchain for tamper-proof verification.",
-      recommendedSteps: ["Wait for doctor to review", "Check back for AI analysis", "Your record is now secured on-chain"],
-    },
-  };
-  records.push(newRecord);
-  persistState();
-
-  res.status(201).json({
-    message:   "File uploaded successfully",
-    record:    newRecord,
-    ipfsHash:  fileHash,
-    aiSummary: newRecord.aiSummary,
-  });
-});
-
-// ─── Queue ────────────────────────────────────────────────────────────────────
-
-app.get("/api/queue", (req, res) => res.json(queueData));
-app.get("/api/queue/:dept", (req, res) => {
-  const entry = queueData.find(q => q.dept.toLowerCase() === req.params.dept.toLowerCase());
-  if (!entry) return res.status(404).json({ error: "Department not found" });
-  res.json(entry);
-});
-
-// ─── Emergency ────────────────────────────────────────────────────────────────
-
-app.post("/api/emergency", (req, res) => {
-  const { patientId, lat, lng } = req.body;
-  if (!patientId) return res.status(400).json({ error: "patientId is required" });
-  const patient = patients.find(p => p.id === patientId) || patients[0];
-  const emergencyToken = `EMR-${randomHex(8)}`;
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  res.status(201).json({
-    message: "Emergency protocol activated", emergencyToken, expiresAt,
-    patient: { id: patient.id, name: patient.name, blood: patient.blood, age: patient.age },
-    location: lat && lng ? { lat, lng } : null,
-    nearbyHospital: { name: "City Hospital", distanceKm: 1.2, etaMinutes: 8 },
-  });
-});
-
-// ─── Doctor license verification (demo registry) ───────────────────────────────
-// Production: replace mock checks with HTTPS call to your national medical council
-// or third-party KYC API (contract required). This stores decisions in doctorLicenseVerifications.
-
-app.post("/api/verification/doctor-license", (req, res) => {
-  const { email, licenseNumber, documentHash } = req.body;
-  if (!email || !licenseNumber) {
-    return res.status(400).json({ error: "email and licenseNumber are required" });
->>>>>>> Stashed changes
-  }
-});
-
-// ── 404 fallback ──────────────────────────────────────────────────────────────
-app.use((req, res) => {
-  res.status(404).json({ error: `Route ${req.method} ${req.path} not found` });
-});
-
-<<<<<<< Updated upstream
-// ── Start ─────────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`\nMediChain backend running on http://localhost:${PORT}`);
-  console.log("\nRoutes:");
-  console.log("  POST /api/auth/signup            POST /api/auth/login");
-  console.log("  GET  /api/dashboard              GET  /api/queue");
-  console.log("  GET  /api/patients               GET  /api/patients/:id");
-  console.log("  GET  /api/doctors                GET  /api/doctors/:id");
-  console.log("  GET  /api/appointments           POST /api/appointments");
-  console.log("  GET  /api/records/:patientId     POST /api/records");
-  console.log("  GET  /api/blockchain/status");
-  console.log("  POST /api/emergency              POST /api/wallet/connect");
-  console.log("  POST /api/verification/doctor-license");
-});
-=======
-// (Server start moved to startServer() after MongoDB connects)
-// Ensure the file ends cleanly
-}
->>>>>>> Stashed changes

@@ -36,19 +36,14 @@ export function LoginPage() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("patient");
   const [walletAddress, setWalletAddress] = useState("");
-  const [loading, setLoading]     = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  // Patient fields
   const [pEmail, setPEmail] = useState("");
   const [pPass,  setPPass]  = useState("");
-
-  // Doctor fields
   const [dEmail, setDEmail] = useState("");
   const [dPass,  setDPass]  = useState("");
 
-  // ── Helper: derive display name from stored data or email ─────────────────
   function resolveDisplayName(apiUser, email) {
-    // Priority: API user name → stored user name → email prefix
     if (apiUser?.name && String(apiUser.name).trim()) return String(apiUser.name).trim();
     try {
       const stored = JSON.parse(localStorage.getItem("user") || "{}");
@@ -59,7 +54,8 @@ export function LoginPage() {
     return email ? email.split("@")[0].replace(/[._]/g, " ") : "User";
   }
 
-  // ── Patient login ─────────────────────────────────────────────────────────
+  // FIX: offline fallback only runs on genuine network errors (TypeError).
+  // A 401 / 403 from the server means wrong credentials — we throw it, not swallow it.
   const handlePatientLogin = async (e) => {
     e.preventDefault();
     if (!pEmail || !pPass) { toast.error("Please fill in all fields"); return; }
@@ -71,41 +67,42 @@ export function LoginPage() {
         body: JSON.stringify({ email: pEmail, password: pPass, role: "patient" }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Login failed");
+      if (!res.ok) {
+        // Server responded with an error (wrong password, wrong role, etc.)
+        toast.error(data.error || "Login failed");
+        return;
+      }
       if (data.token) localStorage.setItem("token", data.token);
-
       const name = resolveDisplayName(data.user, pEmail);
       localStorage.setItem("user", JSON.stringify({
         ...(data.user || {}),
         name,
         email: pEmail,
         role: "patient",
-        patientId: data.user?.patientId || "HLT-0x72A91B",
-        walletAddress: data.user?.walletAddress || "",
+        patientId:      data.user?.patientId      || "HLT-0x72A91B",
+        walletAddress:  data.user?.walletAddress  || "",
         chainPatientId: data.user?.chainPatientId || 72,
       }));
       toast.success(`Welcome back, ${name}!`);
       setTimeout(() => navigate("/patient/dashboard"), 500);
-    } catch {
-      // Offline fallback — try to reuse previously saved name for this email
-      const name = resolveDisplayName(null, pEmail);
-      localStorage.setItem("user", JSON.stringify({
-        id: "USR-LOCAL",
-        name,
-        email: pEmail,
-        role: "patient",
-        patientId: "HLT-0x72A91B",
-        walletAddress: "",
-        chainPatientId: 72,
-      }));
-      toast.success(`Welcome back, ${name}!`);
-      setTimeout(() => navigate("/patient/dashboard"), 500);
+    } catch (err) {
+      // Only reach here on a genuine network / CORS failure (TypeError)
+      if (err instanceof TypeError) {
+        const name = resolveDisplayName(null, pEmail);
+        localStorage.setItem("user", JSON.stringify({
+          id: "USR-LOCAL", name, email: pEmail, role: "patient",
+          patientId: "HLT-0x72A91B", walletAddress: "", chainPatientId: 72,
+        }));
+        toast.success(`Welcome back, ${name}! (offline mode)`);
+        setTimeout(() => navigate("/patient/dashboard"), 500);
+      } else {
+        toast.error(err.message || "Login failed");
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  // ── Doctor login ──────────────────────────────────────────────────────────
   const handleDoctorLogin = async (e) => {
     e.preventDefault();
     if (!dEmail || !dPass) { toast.error("Please fill in all fields"); return; }
@@ -117,40 +114,40 @@ export function LoginPage() {
         body: JSON.stringify({ email: dEmail, password: dPass, role: "doctor" }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Login failed");
+      if (!res.ok) {
+        toast.error(data.error || "Login failed");
+        return;
+      }
       if (data.token) localStorage.setItem("token", data.token);
-
       const name = resolveDisplayName(data.user, dEmail);
       localStorage.setItem("user", JSON.stringify({
         ...(data.user || {}),
         name,
         email: dEmail,
         role: "doctor",
-        specialty: data.user?.specialty || "",
+        specialty:     data.user?.specialty     || "",
         licenseNumber: data.user?.licenseNumber || "",
         walletAddress: data.user?.walletAddress || "",
       }));
       toast.success(`Welcome back, ${name}!`);
       setTimeout(() => navigate("/doctor"), 500);
-    } catch {
-      const name = resolveDisplayName(null, dEmail);
-      localStorage.setItem("user", JSON.stringify({
-        id: "USR-LOCAL",
-        name,
-        email: dEmail,
-        role: "doctor",
-        specialty: "",
-        licenseNumber: "",
-        walletAddress: "",
-      }));
-      toast.success(`Welcome back, ${name}!`);
-      setTimeout(() => navigate("/doctor"), 500);
+    } catch (err) {
+      if (err instanceof TypeError) {
+        const name = resolveDisplayName(null, dEmail);
+        localStorage.setItem("user", JSON.stringify({
+          id: "USR-LOCAL", name, email: dEmail, role: "doctor",
+          specialty: "", licenseNumber: "", walletAddress: "",
+        }));
+        toast.success(`Welcome back, ${name}! (offline mode)`);
+        setTimeout(() => navigate("/doctor"), 500);
+      } else {
+        toast.error(err.message || "Login failed");
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  // ── MetaMask login ────────────────────────────────────────────────────────
   const handleWalletLogin = async () => {
     setLoading(true);
     try {
@@ -172,7 +169,6 @@ export function LoginPage() {
           return;
         }
       } catch (_) {}
-
       toast.success(`Wallet connected: ${shortAddress(address)}`);
       setTimeout(() => navigate(activeTab === "doctor" ? "/doctor" : "/patient/dashboard"), 500);
     } catch (err) {
@@ -190,7 +186,6 @@ export function LoginPage() {
     }}>
       <div style={{ width: "100%", maxWidth: 440 }}>
 
-        {/* Logo */}
         <div style={{ textAlign: "center", marginBottom: 32 }}>
           <div style={{
             width: 56, height: 56, borderRadius: 14,
@@ -202,7 +197,6 @@ export function LoginPage() {
           <p style={{ color: COLORS.muted, fontSize: 14, marginTop: 4 }}>Welcome back — login to continue</p>
         </div>
 
-        {/* Tab Switcher */}
         <div style={{
           display: "flex", background: "#080d1a", borderRadius: 12,
           padding: 4, marginBottom: 24, border: `1px solid ${COLORS.cardBorder}`,
@@ -222,13 +216,11 @@ export function LoginPage() {
           ))}
         </div>
 
-        {/* Card */}
         <div style={{
           background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`,
           borderRadius: 20, padding: 32,
         }}>
 
-          {/* MetaMask */}
           <button onClick={handleWalletLogin} disabled={loading} style={{
             width: "100%", padding: "12px", borderRadius: 10,
             border: `1px solid ${COLORS.accent}44`,
@@ -246,7 +238,6 @@ export function LoginPage() {
             <div style={{ flex: 1, height: 1, background: COLORS.cardBorder }} />
           </div>
 
-          {/* ── Patient login form ── */}
           {activeTab === "patient" ? (
             <form onSubmit={handlePatientLogin} autoComplete="off">
               <h2 style={{ color: COLORS.text, fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Patient Login</h2>
@@ -254,20 +245,12 @@ export function LoginPage() {
 
               <div style={{ marginBottom: 16 }}>
                 <label style={{ color: COLORS.muted, fontSize: 13, display: "block", marginBottom: 6 }}>Email</label>
-                <input
-                  type="email" placeholder="john@email.com"
-                  style={inputStyle} value={pEmail}
-                  onChange={e => setPEmail(e.target.value)}
-                />
+                <input type="email" placeholder="john@email.com" style={inputStyle} value={pEmail} onChange={e => setPEmail(e.target.value)} />
               </div>
 
               <div style={{ marginBottom: 12 }}>
                 <label style={{ color: COLORS.muted, fontSize: 13, display: "block", marginBottom: 6 }}>Password</label>
-                <input
-                  type="password" placeholder="••••••••"
-                  style={inputStyle} value={pPass}
-                  onChange={e => setPPass(e.target.value)}
-                />
+                <input type="password" placeholder="••••••••" style={inputStyle} value={pPass} onChange={e => setPPass(e.target.value)} />
               </div>
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
@@ -283,27 +266,18 @@ export function LoginPage() {
             </form>
 
           ) : (
-            /* ── Doctor login form ── */
             <form onSubmit={handleDoctorLogin} autoComplete="off">
               <h2 style={{ color: COLORS.text, fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Doctor Login</h2>
               <p style={{ color: COLORS.muted, fontSize: 13, marginBottom: 24 }}>Access your professional dashboard</p>
 
               <div style={{ marginBottom: 16 }}>
                 <label style={{ color: COLORS.muted, fontSize: 13, display: "block", marginBottom: 6 }}>Email</label>
-                <input
-                  type="email" placeholder="doctor@hospital.com"
-                  style={inputStyle} value={dEmail}
-                  onChange={e => setDEmail(e.target.value)}
-                />
+                <input type="email" placeholder="doctor@hospital.com" style={inputStyle} value={dEmail} onChange={e => setDEmail(e.target.value)} />
               </div>
 
               <div style={{ marginBottom: 12 }}>
                 <label style={{ color: COLORS.muted, fontSize: 13, display: "block", marginBottom: 6 }}>Password</label>
-                <input
-                  type="password" placeholder="••••••••"
-                  style={inputStyle} value={dPass}
-                  onChange={e => setDPass(e.target.value)}
-                />
+                <input type="password" placeholder="••••••••" style={inputStyle} value={dPass} onChange={e => setDPass(e.target.value)} />
               </div>
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>

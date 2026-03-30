@@ -4,398 +4,224 @@ import { toast } from "sonner";
 import { verifyRecord } from "../hooks/useBlockchain";
 
 const API = process.env.REACT_APP_API_URL || "http://localhost:5000/api";
-const PATIENT_NUM_ID = 72;
 
-function getStoredPatientId() {
-  try {
-    const u = JSON.parse(localStorage.getItem("user") || "{}");
-    if (u.patientId) return u.patientId;
-  } catch (_) {}
-  return "HLT-0x72A91B";
+function authHeaders() {
+  const token = localStorage.getItem("token");
+  return token ? { "Authorization": `Bearer ${token}` } : {};
 }
-
-function getChainPatientId() {
-  try {
-    const u = JSON.parse(localStorage.getItem("user") || "{}");
-    if (u.chainPatientId != null && u.chainPatientId !== "") return Number(u.chainPatientId);
-  } catch (_) {}
-  return PATIENT_NUM_ID;
+function getStoredUser() {
+  try { return JSON.parse(localStorage.getItem("user") || "{}"); } catch (_) { return {}; }
 }
-
+function getStoredPatientId()  { return getStoredUser().patientId || null; }
+function getChainPatientId()   { const u = getStoredUser(); return u.chainPatientId != null ? Number(u.chainPatientId) : null; }
 function getSessionPatientProfile() {
-  try {
-    const u = JSON.parse(localStorage.getItem("user") || "{}");
-    if (u.role === "patient") {
-      return {
-        name: (u.name && String(u.name).trim()) || "Patient",
-        patientId: u.patientId || getStoredPatientId(),
-        fromSession: true,
-      };
-    }
-  } catch (_) {}
-  return { name: "Patient", patientId: getStoredPatientId(), fromSession: false };
+  const u = getStoredUser();
+  if (u.role === "patient" && u.name) return { name: String(u.name).trim(), patientId: u.patientId || null, fromSession: true };
+  return { name: "Patient", patientId: null, fromSession: false };
 }
 
 const COLORS = {
   bg: "#0a0f1e", card: "#0f1729", cardBorder: "#1a2540",
   accent: "#00d4ff", accent2: "#7c3aed", green: "#10b981",
   red: "#ef4444", yellow: "#f59e0b", text: "#e2e8f0", muted: "#64748b",
-  cardHover: "#131d35",
 };
 
-const cardStyle = {
-  background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`,
-  borderRadius: 16, padding: 24,
-};
+const cardStyle = { background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`, borderRadius: 16, padding: 24 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function generateToken() {
-  const prefix = "MCT";
-  const rand = Math.random().toString(36).substring(2, 8).toUpperCase();
-  return `${prefix}-${rand}`;
-}
-
-function Avatar({ name, size = 48 }) {
-  const safeName = name || "Unknown";
-  const initials = safeName.split(" ").filter(w => w !== "Dr.").map(w => w[0]).join("").substring(0, 2);
-  const colors = [
-    ["#0e3a5c", "#00d4ff"], ["#2d1a5c", "#7c3aed"], ["#0a3d2e", "#10b981"],
-    ["#3d2200", "#f59e0b"], ["#3d0a1a", "#ef4444"],
-  ];
-  const pick = colors[(safeName.charCodeAt(4) || 0) % colors.length];
+// ── Empty state ────────────────────────────────────────────────────────────────
+function EmptyState({ icon, title, message }) {
   return (
-    <div style={{
-      width: size, height: size, borderRadius: "50%", flexShrink: 0,
-      background: pick[0], border: `2px solid ${pick[1]}40`,
-      display: "flex", alignItems: "center", justifyContent: "center",
-      fontSize: size * 0.33, fontWeight: 700, color: pick[1], fontFamily: "monospace",
-    }}>{initials}</div>
+    <div style={{ textAlign: "center", padding: "40px 24px", color: COLORS.muted }}>
+      <div style={{ fontSize: 36, marginBottom: 10 }}>{icon}</div>
+      {title && <p style={{ color: COLORS.text, fontSize: 15, fontWeight: 600, marginBottom: 6 }}>{title}</p>}
+      <p style={{ fontSize: 13, lineHeight: 1.6 }}>{message}</p>
+    </div>
   );
 }
 
-// ── TopBar ────────────────────────────────────────────────────────────────────
+// ── File Viewer modal ─────────────────────────────────────────────────────────
+function FileViewer({ recordId, fileName, ipfsUrl, onClose }) {
+  const url = recordId ? `${API}/records/file/${recordId}` : ipfsUrl;
+  if (!url) return null;
+  const isImage = /\.(png|jpg|jpeg|gif|webp)$/i.test(fileName || "");
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.93)", zIndex: 600, display: "flex", flexDirection: "column" }}>
+      <div style={{ height: 56, background: "#080d1a", borderBottom: `1px solid ${COLORS.cardBorder}`, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 18 }}>📄</span>
+          <span style={{ color: COLORS.text, fontSize: 14, fontWeight: 600 }}>{fileName || "Report"}</span>
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <a href={url} download={fileName || "report"} style={{ padding: "6px 14px", borderRadius: 8, background: `${COLORS.green}20`, color: COLORS.green, border: `1px solid ${COLORS.green}30`, fontSize: 13, fontWeight: 600, textDecoration: "none" }}>⬇ Download</a>
+          <button onClick={onClose} style={{ padding: "6px 14px", borderRadius: 8, background: "transparent", color: COLORS.muted, border: `1px solid ${COLORS.cardBorder}`, fontSize: 13, cursor: "pointer" }}>✕ Close</button>
+        </div>
+      </div>
+      <div style={{ flex: 1, overflow: "hidden" }}>
+        {isImage
+          ? <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}><img src={url} alt={fileName} style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 12, objectFit: "contain" }} /></div>
+          : <iframe src={url} title={fileName} style={{ width: "100%", height: "100%", border: "none", background: "#fff" }} />}
+      </div>
+    </div>
+  );
+}
+
+function generateToken() { return `MCT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`; }
+
+function Avatar({ name, size = 48 }) {
+  const safe    = name || "Unknown";
+  const initials = safe.split(" ").filter(w => w !== "Dr.").map(w => w[0]).join("").substring(0, 2);
+  const palettes = [["#0e3a5c","#00d4ff"],["#2d1a5c","#7c3aed"],["#0a3d2e","#10b981"],["#3d2200","#f59e0b"],["#3d0a1a","#ef4444"]];
+  const p = palettes[(safe.charCodeAt(4) || 0) % palettes.length];
+  return <div style={{ width: size, height: size, borderRadius: "50%", flexShrink: 0, background: p[0], border: `2px solid ${p[1]}40`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.33, fontWeight: 700, color: p[1], fontFamily: "monospace" }}>{initials}</div>;
+}
+
 function TopBar({ patientName, onLogout }) {
   return (
-    <div style={{
-      background: "#080d1a", borderBottom: `1px solid ${COLORS.cardBorder}`,
-      padding: "0 32px", height: 64,
-      display: "flex", alignItems: "center", justifyContent: "space-between",
-      position: "sticky", top: 0, zIndex: 100,
-    }}>
+    <div style={{ background: "#080d1a", borderBottom: `1px solid ${COLORS.cardBorder}`, padding: "0 32px", height: 64, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{
-          width: 36, height: 36, borderRadius: 10,
-          background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`,
-          display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
-        }}>⛓️</div>
+        <div style={{ width: 36, height: 36, borderRadius: 10, background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>⛓️</div>
         <div>
           <div style={{ color: COLORS.text, fontWeight: 700, fontSize: 15, fontFamily: "monospace" }}>MediChain</div>
           <div style={{ color: COLORS.muted, fontSize: 10 }}>Patient Portal · {patientName}</div>
         </div>
       </div>
       <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-        <Link to="/patient/upload" style={{
-          color: COLORS.accent, fontSize: 13, textDecoration: "none",
-          padding: "6px 14px", borderRadius: 8,
-          background: `${COLORS.accent}15`, border: `1px solid ${COLORS.accent}30`,
-        }}>📤 Upload Report</Link>
-        <button
-          type="button"
-          onClick={onLogout}
-          style={{
-            color: COLORS.muted, fontSize: 13,
-            padding: "6px 14px", borderRadius: 8, border: `1px solid ${COLORS.cardBorder}`,
-            background: "transparent", cursor: "pointer", fontFamily: "inherit",
-          }}
-        >Logout</button>
+        <Link to="/patient/upload" style={{ color: COLORS.accent, fontSize: 13, textDecoration: "none", padding: "6px 14px", borderRadius: 8, background: `${COLORS.accent}15`, border: `1px solid ${COLORS.accent}30` }}>📤 Upload Report</Link>
+        <button type="button" onClick={onLogout} style={{ color: COLORS.muted, fontSize: 13, padding: "6px 14px", borderRadius: 8, border: `1px solid ${COLORS.cardBorder}`, background: "transparent", cursor: "pointer", fontFamily: "inherit" }}>Logout</button>
       </div>
     </div>
   );
 }
 
-// ── Doctor Detail Modal ───────────────────────────────────────────────────────
 function DoctorModal({ doctor, onClose, onSelect }) {
   if (!doctor) return null;
-
-  const tags = Array.isArray(doctor.tags) ? doctor.tags : [];
-  const languages = Array.isArray(doctor.languages) ? doctor.languages : [];
-  const reviews = Array.isArray(doctor.reviews) ? doctor.reviews : [];
-
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 200,
-        display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
-      }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`,
-          borderRadius: 20, padding: 32, maxWidth: 560, width: "100%",
-          maxHeight: "90vh", overflowY: "auto",
-        }}
-      >
-        {/* Header */}
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`, borderRadius: 20, padding: 32, maxWidth: 560, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
         <div style={{ display: "flex", gap: 16, alignItems: "flex-start", marginBottom: 24 }}>
           <Avatar name={doctor.name} size={64} />
           <div style={{ flex: 1 }}>
             <h2 style={{ color: COLORS.text, fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{doctor.name}</h2>
             <p style={{ color: COLORS.accent, fontSize: 13, marginBottom: 4 }}>{doctor.specialty} · {doctor.hospital}</p>
-            <p style={{ color: COLORS.muted, fontSize: 12 }}>{doctor.experience} experience · {doctor.education}</p>
+            <p style={{ color: COLORS.muted, fontSize: 12 }}>{doctor.experience} yrs exp · {doctor.education}</p>
             <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-              <span style={{ color: COLORS.yellow, fontSize: 13 }}>⭐ {doctor.rating}</span>
-              <span style={{ color: COLORS.muted, fontSize: 13 }}>({doctor.reviewCount} reviews)</span>
-              <span style={{ color: COLORS.green, fontSize: 13, fontWeight: 700 }}>₹{doctor.fee}/consult</span>
+              {doctor.rating > 0 && <span style={{ color: COLORS.yellow, fontSize: 13 }}>⭐ {doctor.rating}</span>}
+              {doctor.fee > 0 && <span style={{ color: COLORS.green, fontSize: 13, fontWeight: 700 }}>₹{doctor.fee}/consult</span>}
             </div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: COLORS.muted, fontSize: 22, cursor: "pointer", lineHeight: 1 }}>×</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: COLORS.muted, fontSize: 22, cursor: "pointer" }}>×</button>
         </div>
-
-        {/* About */}
-        <div style={{ marginBottom: 20 }}>
-          <p style={{ color: COLORS.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>About</p>
-          <p style={{ color: COLORS.text, fontSize: 14, lineHeight: 1.7, background: COLORS.bg, padding: 14, borderRadius: 10 }}>{doctor.bio}</p>
-        </div>
-
-        {/* Specializations */}
-        <div style={{ marginBottom: 20 }}>
-          <p style={{ color: COLORS.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Specializations</p>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {tags.map(tag => (
-              <span key={tag} style={{
-                background: `${COLORS.accent2}20`, color: "#a78bfa",
-                border: `1px solid ${COLORS.accent2}30`,
-                padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600,
-              }}>{tag}</span>
-            ))}
+        {doctor.bio && (
+          <div style={{ marginBottom: 20 }}>
+            <p style={{ color: COLORS.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>About</p>
+            <p style={{ color: COLORS.text, fontSize: 14, lineHeight: 1.7, background: COLORS.bg, padding: 14, borderRadius: 10 }}>{doctor.bio}</p>
           </div>
-        </div>
-
-        {/* Languages */}
-        <div style={{ marginBottom: 20 }}>
-          <p style={{ color: COLORS.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Languages Spoken</p>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {languages.map(lang => (
-              <span key={lang} style={{
-                background: `${COLORS.accent}10`, color: COLORS.accent,
-                border: `1px solid ${COLORS.accent}25`,
-                padding: "4px 12px", borderRadius: 20, fontSize: 12,
-              }}>🗣️ {lang}</span>
-            ))}
+        )}
+        {(doctor.languages || []).length > 0 && (
+          <div style={{ marginBottom: 20 }}>
+            <p style={{ color: COLORS.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Languages</p>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {doctor.languages.map(l => <span key={l} style={{ background: `${COLORS.accent}10`, color: COLORS.accent, border: `1px solid ${COLORS.accent}25`, padding: "4px 12px", borderRadius: 20, fontSize: 12 }}>🗣️ {l}</span>)}
+            </div>
           </div>
-        </div>
-
-        {/* Reviews */}
-        <div style={{ marginBottom: 24 }}>
-          <p style={{ color: COLORS.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Patient Reviews</p>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {reviews.map((r, i) => (
-              <div key={i} style={{ background: COLORS.bg, padding: 12, borderRadius: 10, border: `1px solid ${COLORS.cardBorder}` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                  <span style={{ color: COLORS.text, fontSize: 13, fontWeight: 600 }}>{r.name}</span>
-                  <span style={{ color: COLORS.yellow, fontSize: 12 }}>{"⭐".repeat(r.rating)}</span>
-                </div>
-                <p style={{ color: COLORS.muted, fontSize: 13, lineHeight: 1.5 }}>{r.comment}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <button
-          onClick={() => { onSelect(doctor); onClose(); }}
-          style={{
-            width: "100%", padding: 14,
-            background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`,
-            border: "none", color: "#fff", fontSize: 15, fontWeight: 700,
-            borderRadius: 12, cursor: "pointer",
-          }}
-        >Book Appointment with {(doctor.name || "").split(" ").slice(-1)}</button>
+        )}
+        <button onClick={() => { onSelect(doctor); onClose(); }} style={{ width: "100%", padding: 14, background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`, border: "none", color: "#fff", fontSize: 15, fontWeight: 700, borderRadius: 12, cursor: "pointer" }}>
+          Book Appointment with {(doctor.name || "").split(" ").slice(-1)}
+        </button>
       </div>
     </div>
   );
 }
 
-// ── Payment Modal ─────────────────────────────────────────────────────────────
-function PaymentModal({ doctor, time, isEmergency, onClose, onSuccess }) {
-  const [step, setStep] = useState("payment");
+function PaymentModal({ doctor, time, date, isEmergency, patientId, onClose, onSuccess }) {
+  const [step, setStep]     = useState("payment");
   const [method, setMethod] = useState("card");
-  const [token, setToken] = useState("");
-  const totalFee = isEmergency ? Math.round(doctor.fee * 1.5) : doctor.fee;
+  const [token, setToken]   = useState("");
+  const totalFee = isEmergency ? Math.round((doctor.fee || 0) * 1.5) : (doctor.fee || 0);
 
   const handlePay = async () => {
     setStep("processing");
-    await new Promise(r => setTimeout(r, 2200));
-    const newToken = generateToken();
-    setToken(newToken);
+    try {
+      const res = await fetch(`${API}/appointments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({
+          patientId,
+          doctorId:      doctor.id || doctor._id,
+          doctorName:    doctor.name,
+          date:          date || new Date().toISOString().slice(0, 10),
+          time,
+          type:          "Consultation",
+          isEmergency:   !!isEmergency,
+          fee:           totalFee,
+          feePaid:       true,
+          paymentMethod: method,
+        }),
+      });
+      const data   = await res.json();
+      const newTok = data.tokenId || data.blockchain || generateToken();
+      setToken(newTok);
+    } catch {
+      setToken(generateToken());
+    }
     setStep("done");
   };
 
-  if (step === "done") {
-    return (
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-        <div onClick={e => e.stopPropagation()} style={{ background: COLORS.card, border: `1px solid ${COLORS.green}40`, borderRadius: 20, padding: 32, maxWidth: 440, width: "100%", textAlign: "center" }}>
-          <div style={{ fontSize: 56, marginBottom: 16 }}>🎉</div>
-          <h2 style={{ color: COLORS.green, fontSize: 22, fontWeight: 800, marginBottom: 8 }}>Appointment Confirmed!</h2>
-          <p style={{ color: COLORS.muted, fontSize: 14, marginBottom: 24 }}>Payment successful. Your appointment token has been generated.</p>
+  if (step === "processing") return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ textAlign: "center", color: COLORS.text }}>
+        <div style={{ fontSize: 48, marginBottom: 16 }}>⛓️</div>
+        <p style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Processing Payment...</p>
+        <p style={{ color: COLORS.muted, fontSize: 13 }}>Booking appointment</p>
+      </div>
+    </div>
+  );
 
-          <div style={{ background: COLORS.bg, border: `1px solid ${COLORS.accent}40`, borderRadius: 14, padding: 20, marginBottom: 24 }}>
-            <p style={{ color: COLORS.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: 1, marginBottom: 12 }}>Appointment Token</p>
-            <div style={{
-              fontFamily: "monospace", fontSize: 28, fontWeight: 800,
-              color: COLORS.accent, letterSpacing: 4, marginBottom: 16,
-              background: `${COLORS.accent}10`, padding: "10px 20px", borderRadius: 10,
-              border: `1px solid ${COLORS.accent}30`,
-            }}>{token}</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, textAlign: "left" }}>
-              {[
-                { label: "Doctor", value: doctor.name },
-                { label: "Specialty", value: doctor.specialty },
-                { label: "Time", value: time },
-                { label: "Date", value: new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) },
-                { label: "Hospital", value: doctor.hospital },
-                { label: "Fee Paid", value: `₹${totalFee}` },
-              ].map(item => (
-                <div key={item.label} style={{ background: COLORS.card, padding: "8px 12px", borderRadius: 8 }}>
-                  <p style={{ color: COLORS.muted, fontSize: 10, marginBottom: 2 }}>{item.label}</p>
-                  <p style={{ color: COLORS.text, fontSize: 12, fontWeight: 600 }}>{item.value}</p>
-                </div>
-              ))}
-            </div>
-            {isEmergency && (
-              <div style={{ marginTop: 10, padding: "8px 12px", background: `${COLORS.red}15`, border: `1px solid ${COLORS.red}30`, borderRadius: 8 }}>
-                <p style={{ color: COLORS.red, fontSize: 12, fontWeight: 700 }}>🚨 Emergency Priority — You are #1 in queue</p>
+  if (step === "done") return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: COLORS.card, border: `1px solid ${COLORS.green}40`, borderRadius: 20, padding: 32, maxWidth: 440, width: "100%", textAlign: "center" }}>
+        <div style={{ fontSize: 56, marginBottom: 16 }}>🎉</div>
+        <h2 style={{ color: COLORS.green, fontSize: 22, fontWeight: 800, marginBottom: 8 }}>Appointment Confirmed!</h2>
+        <div style={{ background: COLORS.bg, border: `1px solid ${COLORS.accent}40`, borderRadius: 14, padding: 20, marginBottom: 24 }}>
+          <div style={{ fontFamily: "monospace", fontSize: 26, fontWeight: 800, color: COLORS.accent, letterSpacing: 3, marginBottom: 16, background: `${COLORS.accent}10`, padding: "10px 20px", borderRadius: 10 }}>{token}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, textAlign: "left" }}>
+            {[{ label: "Doctor", value: doctor.name }, { label: "Time", value: time }, { label: "Date", value: date }, { label: "Fee Paid", value: `₹${totalFee}` }].map(it => (
+              <div key={it.label} style={{ background: COLORS.card, padding: "8px 12px", borderRadius: 8 }}>
+                <p style={{ color: COLORS.muted, fontSize: 10, marginBottom: 2 }}>{it.label}</p>
+                <p style={{ color: COLORS.text, fontSize: 12, fontWeight: 600 }}>{it.value}</p>
               </div>
-            )}
+            ))}
           </div>
-
-          <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 20 }}>
-            Show this token at the hospital reception. A confirmation SMS has been sent to your registered number.
-          </p>
-          <button
-            onClick={() => { onSuccess(token); onClose(); }}
-            style={{
-              width: "100%", padding: 13,
-              background: `linear-gradient(135deg, ${COLORS.green}, #059669)`,
-              border: "none", color: "#fff", fontSize: 14, fontWeight: 700,
-              borderRadius: 10, cursor: "pointer",
-            }}
-          >✅ Done</button>
         </div>
+        <button onClick={() => { onSuccess(token); onClose(); }} style={{ width: "100%", padding: 13, background: `linear-gradient(135deg, ${COLORS.green}, #059669)`, border: "none", color: "#fff", fontSize: 14, fontWeight: 700, borderRadius: 10, cursor: "pointer" }}>✅ Done</button>
       </div>
-    );
-  }
-
-  if (step === "processing") {
-    return (
-      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ textAlign: "center", color: COLORS.text }}>
-          <div style={{ fontSize: 48, marginBottom: 16, animation: "spin 1s linear infinite" }}>⛓️</div>
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-          <p style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Processing Payment...</p>
-          <p style={{ color: COLORS.muted, fontSize: 13 }}>Minting appointment token on blockchain</p>
-        </div>
-      </div>
-    );
-  }
+    </div>
+  );
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div onClick={e => e.stopPropagation()} style={{ background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`, borderRadius: 20, padding: 28, maxWidth: 420, width: "100%" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <h3 style={{ color: COLORS.text, fontSize: 18, fontWeight: 800 }}>💳 Payment</h3>
           <button onClick={onClose} style={{ background: "none", border: "none", color: COLORS.muted, fontSize: 22, cursor: "pointer" }}>×</button>
         </div>
-
         <div style={{ background: COLORS.bg, borderRadius: 12, padding: 16, marginBottom: 20 }}>
           <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12, paddingBottom: 12, borderBottom: `1px solid ${COLORS.cardBorder}` }}>
             <Avatar name={doctor.name} size={40} />
-            <div>
-              <p style={{ color: COLORS.text, fontSize: 14, fontWeight: 700 }}>{doctor.name}</p>
-              <p style={{ color: COLORS.muted, fontSize: 12 }}>{doctor.specialty} · {time}</p>
-            </div>
+            <div><p style={{ color: COLORS.text, fontSize: 14, fontWeight: 700 }}>{doctor.name}</p><p style={{ color: COLORS.muted, fontSize: 12 }}>{doctor.specialty} · {time}</p></div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: COLORS.muted, fontSize: 13 }}>Consultation Fee</span>
-              <span style={{ color: COLORS.text, fontSize: 13 }}>₹{doctor.fee}</span>
-            </div>
-            {isEmergency && (
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ color: COLORS.red, fontSize: 13 }}>Emergency Surcharge (50%)</span>
-                <span style={{ color: COLORS.red, fontSize: 13 }}>+₹{Math.round(doctor.fee * 0.5)}</span>
-              </div>
-            )}
-            <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 8, borderTop: `1px solid ${COLORS.cardBorder}`, marginTop: 4 }}>
-              <span style={{ color: COLORS.text, fontSize: 15, fontWeight: 700 }}>Total</span>
-              <span style={{ color: COLORS.accent, fontSize: 15, fontWeight: 800 }}>₹{totalFee}</span>
-            </div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: COLORS.muted, fontSize: 13 }}>Consultation Fee</span><span style={{ color: COLORS.text, fontSize: 13 }}>₹{doctor.fee}</span></div>
+            {isEmergency && <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: COLORS.red, fontSize: 13 }}>Emergency Surcharge (50%)</span><span style={{ color: COLORS.red, fontSize: 13 }}>+₹{Math.round((doctor.fee || 0) * 0.5)}</span></div>}
+            <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 8, borderTop: `1px solid ${COLORS.cardBorder}`, marginTop: 4 }}><span style={{ color: COLORS.text, fontSize: 15, fontWeight: 700 }}>Total</span><span style={{ color: COLORS.accent, fontSize: 15, fontWeight: 800 }}>₹{totalFee}</span></div>
           </div>
         </div>
-
-        <p style={{ color: COLORS.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>Payment Method</p>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 20 }}>
-          {[
-            { key: "card", label: "💳 Card" },
-            { key: "upi", label: "📱 UPI" },
-            { key: "netbanking", label: "🏦 Net Banking" },
-          ].map(m => (
-            <button
-              key={m.key}
-              onClick={() => setMethod(m.key)}
-              style={{
-                padding: "10px 6px", borderRadius: 10, cursor: "pointer", fontSize: 12,
-                border: `1px solid ${method === m.key ? COLORS.accent : COLORS.cardBorder}`,
-                background: method === m.key ? `${COLORS.accent}15` : COLORS.bg,
-                color: method === m.key ? COLORS.accent : COLORS.muted,
-                fontWeight: method === m.key ? 700 : 400,
-              }}
-            >{m.label}</button>
+          {[{ key: "card", label: "💳 Card" }, { key: "upi", label: "📱 UPI" }, { key: "netbanking", label: "🏦 Net Banking" }].map(m => (
+            <button key={m.key} onClick={() => setMethod(m.key)} style={{ padding: "10px 6px", borderRadius: 10, cursor: "pointer", fontSize: 12, border: `1px solid ${method === m.key ? COLORS.accent : COLORS.cardBorder}`, background: method === m.key ? `${COLORS.accent}15` : COLORS.bg, color: method === m.key ? COLORS.accent : COLORS.muted, fontWeight: method === m.key ? 700 : 400 }}>{m.label}</button>
           ))}
         </div>
-
-        {method === "card" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
-            {[
-              { placeholder: "Card Number", defaultValue: "•••• •••• •••• 4242" },
-              { placeholder: "Name on Card", defaultValue: "John Doe" },
-            ].map(f => (
-              <input key={f.placeholder} defaultValue={f.defaultValue} style={{
-                background: COLORS.bg, border: `1px solid ${COLORS.cardBorder}`, borderRadius: 10,
-                padding: "10px 14px", color: COLORS.text, fontSize: 13, outline: "none", width: "100%",
-              }} />
-            ))}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <input defaultValue="12/28" style={{ background: COLORS.bg, border: `1px solid ${COLORS.cardBorder}`, borderRadius: 10, padding: "10px 14px", color: COLORS.text, fontSize: 13, outline: "none" }} />
-              <input defaultValue="•••" style={{ background: COLORS.bg, border: `1px solid ${COLORS.cardBorder}`, borderRadius: 10, padding: "10px 14px", color: COLORS.text, fontSize: 13, outline: "none" }} />
-            </div>
-          </div>
-        )}
-        {method === "upi" && (
-          <input defaultValue="john@upi" style={{
-            width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.cardBorder}`, borderRadius: 10,
-            padding: "10px 14px", color: COLORS.text, fontSize: 13, outline: "none", marginBottom: 20,
-          }} />
-        )}
-        {method === "netbanking" && (
-          <select style={{
-            width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.cardBorder}`, borderRadius: 10,
-            padding: "10px 14px", color: COLORS.text, fontSize: 13, outline: "none", marginBottom: 20,
-          }}>
-            <option>State Bank of India</option>
-            <option>HDFC Bank</option>
-            <option>ICICI Bank</option>
-            <option>Axis Bank</option>
-          </select>
-        )}
-
-        <button onClick={handlePay} style={{
-          width: "100%", padding: 14,
-          background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`,
-          border: "none", color: "#fff", fontSize: 15, fontWeight: 700,
-          borderRadius: 12, cursor: "pointer",
-        }}>
+        <button onClick={handlePay} style={{ width: "100%", padding: 14, background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`, border: "none", color: "#fff", fontSize: 15, fontWeight: 700, borderRadius: 12, cursor: "pointer" }}>
           Pay ₹{totalFee} & Confirm Appointment
         </button>
       </div>
@@ -403,112 +229,95 @@ function PaymentModal({ doctor, time, isEmergency, onClose, onSuccess }) {
   );
 }
 
-// ── AISummaryCard ─────────────────────────────────────────────────────────────
 function AISummaryCard({ summary }) {
-  const keyFindings = Array.isArray(summary.keyFindings) ? summary.keyFindings : [];
-  const recommendedSteps = Array.isArray(summary.recommendedSteps) ? summary.recommendedSteps : [];
-
   return (
     <div style={{ background: `${COLORS.accent2}0d`, border: `1px solid ${COLORS.accent2}30`, borderRadius: 14, padding: 24 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
-        <span style={{ fontSize: 20 }}>✨</span>
-        <h4 style={{ color: COLORS.text, fontWeight: 700, fontSize: 16 }}>AI Summary</h4>
-      </div>
-      <div style={{ marginBottom: 20 }}>
-        <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>Plain Language Explanation</p>
-        <p style={{ color: COLORS.text, fontSize: 14, lineHeight: 1.7, background: COLORS.bg, padding: 14, borderRadius: 10 }}>
-          {summary.plainLanguage}
-        </p>
-      </div>
-      <div style={{ marginBottom: 20 }}>
-        <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>Key Findings</p>
-        {keyFindings.map((f, i) => (
-          <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 8 }}>
-            <span style={{ color: COLORS.yellow, marginTop: 2 }}>⚡</span>
-            <span style={{ color: COLORS.text, fontSize: 14 }}>{f}</span>
-          </div>
-        ))}
-      </div>
-      <div>
-        <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>Recommended Steps</p>
-        {recommendedSteps.map((s, i) => (
-          <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 8 }}>
-            <span style={{ color: COLORS.green, marginTop: 2 }}>✅</span>
-            <span style={{ color: COLORS.text, fontSize: 14 }}>{s}</span>
-          </div>
-        ))}
-      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}><span style={{ fontSize: 20 }}>✨</span><h4 style={{ color: COLORS.text, fontWeight: 700, fontSize: 16 }}>AI Summary</h4></div>
+      <p style={{ color: COLORS.text, fontSize: 14, lineHeight: 1.7, background: COLORS.bg, padding: 14, borderRadius: 10, marginBottom: 16 }}>{summary.plainLanguage}</p>
+      {(summary.keyFindings || []).length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>Key Findings</p>
+          {summary.keyFindings.map((f, i) => <div key={i} style={{ display: "flex", gap: 10, marginBottom: 8 }}><span style={{ color: COLORS.yellow }}>⚡</span><span style={{ color: COLORS.text, fontSize: 14 }}>{f}</span></div>)}
+        </div>
+      )}
+      {(summary.recommendedSteps || []).length > 0 && (
+        <div>
+          <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>Recommended Steps</p>
+          {summary.recommendedSteps.map((s, i) => <div key={i} style={{ display: "flex", gap: 10, marginBottom: 8 }}><span style={{ color: COLORS.green }}>✅</span><span style={{ color: COLORS.text, fontSize: 14 }}>{s}</span></div>)}
+        </div>
+      )}
     </div>
   );
 }
 
-// ── Main Component ────────────────────────────────────────────────────────────
 export function PatientDashboard() {
   const navigate = useNavigate();
   const [sessionPatient, setSessionPatient] = useState(() => getSessionPatientProfile());
-  const [doctors, setDoctors]           = useState([]);
-  const [reports, setReports]           = useState([]);
-  const [appointments, setAppointments] = useState([]);
+  const [doctors,        setDoctors]        = useState([]);
+  const [reports,        setReports]        = useState([]);
+  const [appointments,   setAppointments]   = useState([]);
+  const [loading,        setLoading]        = useState(true);
+
   const [selectedDoctor, setSelectedDoctor] = useState(null);
-  const [selectedTime, setSelectedTime] = useState("");
-  const [isEmergency, setIsEmergency]   = useState(false);
-  const [activeTab, setActiveTab]       = useState("reports");
+  const [selectedTime,   setSelectedTime]   = useState("");
+  const [selectedDate,   setSelectedDate]   = useState(new Date().toISOString().slice(0, 10));
+  const [isEmergency,    setIsEmergency]    = useState(false);
+  const [modalDoctor,    setModalDoctor]    = useState(null);
+  const [showPayment,    setShowPayment]    = useState(false);
+  const [bookedTokens,   setBookedTokens]  = useState([]);
+  const [filterSpec,     setFilterSpec]    = useState("All");
+
+  const [activeTab,      setActiveTab]      = useState("reports");
   const [selectedReport, setSelectedReport] = useState(null);
-  const [loading, setLoading]           = useState(true);
-  const [verifyStatus, setVerifyStatus] = useState({});
-  const [modalDoctor, setModalDoctor]   = useState(null);
-  const [showPayment, setShowPayment]   = useState(false);
-  const [bookedTokens, setBookedTokens] = useState([]);
-  const [filterSpec, setFilterSpec]     = useState("All");
+  const [verifyStatus,   setVerifyStatus]  = useState({});
+  const [viewerRecord,   setViewerRecord]  = useState(null);
+
+  const patientId = getStoredPatientId();
 
   useEffect(() => {
-    const syncSession = () => setSessionPatient(getSessionPatientProfile());
-    syncSession();
-    window.addEventListener("focus", syncSession);
-    window.addEventListener("storage", syncSession);
-    return () => {
-      window.removeEventListener("focus", syncSession);
-      window.removeEventListener("storage", syncSession);
-    };
+    const sync = () => setSessionPatient(getSessionPatientProfile());
+    sync();
+    window.addEventListener("focus", sync);
+    window.addEventListener("storage", sync);
+    return () => { window.removeEventListener("focus", sync); window.removeEventListener("storage", sync); };
   }, []);
 
   useEffect(() => {
+    if (!patientId) { setLoading(false); return; }
     let cancelled = false;
+
     const load = () => {
-      const pid = getStoredPatientId();
+      const headers = authHeaders();
       Promise.all([
         fetch(`${API}/doctors`).then(r => r.json()).catch(() => []),
-        fetch(`${API}/records/${encodeURIComponent(pid)}`).then(r => r.json()).catch(() => []),
-        fetch(`${API}/appointments?patientId=${encodeURIComponent(pid)}`).then(r => r.json()).catch(() => []),
+        fetch(`${API}/records/${encodeURIComponent(patientId)}`, { headers }).then(r => r.json()).catch(() => []),
+        fetch(`${API}/appointments?patientId=${encodeURIComponent(patientId)}`, { headers }).then(r => r.json()).catch(() => []),
       ]).then(([docs, recs, appts]) => {
         if (cancelled) return;
-        const safeDocs  = Array.isArray(docs)  && docs.length  ? docs  : mockDoctors;
-        const safeRecs  = Array.isArray(recs) ? recs : mockReports;
-        const safeAppts = Array.isArray(appts) ? appts : [];
-
-        setDoctors(safeDocs);
+        // Only real data — no mock fallback
+        setDoctors(Array.isArray(docs) ? docs : []);
+        const safeRecs = Array.isArray(recs) ? recs : [];
         setReports(safeRecs);
-        setAppointments(safeAppts);
+        setAppointments(Array.isArray(appts) ? appts : []);
         if (safeRecs.length) setSelectedReport(safeRecs[0]);
       }).finally(() => { if (!cancelled) setLoading(false); });
     };
+
     load();
     const interval = setInterval(load, 10000);
     const onBump = (e) => { if (e.key === "medichain-records-bump") load(); };
     window.addEventListener("storage", onBump);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-      window.removeEventListener("storage", onBump);
-    };
-  }, []);
+    return () => { cancelled = true; clearInterval(interval); window.removeEventListener("storage", onBump); };
+  }, [patientId]);
 
   const handleVerifyReport = async (report, idx) => {
     setVerifyStatus(s => ({ ...s, [idx]: "checking" }));
     try {
-      const ok = await verifyRecord(getChainPatientId(), report);
+      const chainId = getChainPatientId();
+      if (!chainId) throw new Error("No chain patient ID found");
+      const ok = await verifyRecord(chainId, report);
       setVerifyStatus(s => ({ ...s, [idx]: ok ? "verified" : "failed" }));
-      toast[ok ? "success" : "error"](ok ? "✅ Record verified on blockchain!" : "⚠️ Hash mismatch — record may have been altered!");
+      toast[ok ? "success" : "error"](ok ? "✅ Verified on blockchain!" : "⚠️ Hash mismatch detected!");
     } catch (err) {
       setVerifyStatus(s => ({ ...s, [idx]: "failed" }));
       toast.error("Verification failed: " + err.message);
@@ -516,102 +325,57 @@ export function PatientDashboard() {
   };
 
   const handlePaymentSuccess = (token) => {
-    const entry = {
-      token, doctor: selectedDoctor, time: selectedTime,
-      isEmergency, date: new Date().toLocaleDateString("en-IN"),
-    };
-    setBookedTokens(prev => [entry, ...prev]);
-    setAppointments(prev => [entry, ...prev]);
-    setSelectedDoctor(null);
-    setSelectedTime("");
-    setIsEmergency(false);
-    toast.success(`✅ Token ${token} saved to your appointments!`);
+    setBookedTokens(prev => [{ token, doctor: selectedDoctor, time: selectedTime, date: selectedDate, isEmergency }, ...prev]);
+    setSelectedDoctor(null); setSelectedTime(""); setIsEmergency(false);
+    toast.success(`✅ Appointment booked! Token: ${token}`);
   };
 
-  const displayReports = reports.length ? reports : mockReports;
-  const displayDoctors = doctors.length ? doctors : mockDoctors;
-  const specialties = ["All", ...new Set(displayDoctors.map(d => d.specialty).filter(Boolean))];
-  const filteredDoctors = filterSpec === "All" ? displayDoctors : displayDoctors.filter(d => d.specialty === filterSpec);
+  const specialties = ["All", ...new Set((doctors || []).map(d => d.specialty).filter(Boolean))];
+  const filteredDoctors = filterSpec === "All" ? doctors : doctors.filter(d => d.specialty === filterSpec);
 
   return (
     <div style={{ minHeight: "100vh", background: COLORS.bg, fontFamily: "'Segoe UI', sans-serif" }}>
-      <style>{`
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: #0a0f1e; }
-        ::-webkit-scrollbar-thumb { background: #1a2540; border-radius: 3px; }
-        input, select { font-family: 'Segoe UI', sans-serif; }
-      `}</style>
+      <style>{`* { box-sizing: border-box; margin: 0; padding: 0; } ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #0a0f1e; } ::-webkit-scrollbar-thumb { background: #1a2540; border-radius: 3px; }`}</style>
 
-      <TopBar
-        patientName={sessionPatient.name}
-        onLogout={() => {
-          localStorage.removeItem("token");
-          localStorage.removeItem("user");
-          setSessionPatient(getSessionPatientProfile());
-          navigate("/");
-        }}
-      />
+      <TopBar patientName={sessionPatient.name} onLogout={() => { localStorage.removeItem("token"); localStorage.removeItem("user"); navigate("/"); }} />
 
-      {modalDoctor && (
-        <DoctorModal
-          doctor={modalDoctor}
-          onClose={() => setModalDoctor(null)}
-          onSelect={(doc) => { setSelectedDoctor(doc); setSelectedTime(""); }}
-        />
-      )}
+      {modalDoctor && <DoctorModal doctor={modalDoctor} onClose={() => setModalDoctor(null)} onSelect={doc => { setSelectedDoctor(doc); setSelectedTime(""); }} />}
       {showPayment && selectedDoctor && selectedTime && (
-        <PaymentModal
-          doctor={selectedDoctor}
-          time={selectedTime}
-          isEmergency={isEmergency}
-          onClose={() => setShowPayment(false)}
-          onSuccess={handlePaymentSuccess}
-        />
+        <PaymentModal doctor={selectedDoctor} time={selectedTime} date={selectedDate} isEmergency={isEmergency} patientId={patientId} onClose={() => setShowPayment(false)} onSuccess={handlePaymentSuccess} />
       )}
+      {viewerRecord && <FileViewer recordId={viewerRecord.id} fileName={viewerRecord.fileName} ipfsUrl={viewerRecord.ipfsUrl} onClose={() => setViewerRecord(null)} />}
 
       <div style={{ maxWidth: 1280, margin: "0 auto", padding: "32px 24px" }}>
-
         <div style={{ marginBottom: 28 }}>
-          <h1 style={{ color: COLORS.text, fontSize: 28, fontWeight: 800, marginBottom: 4 }}>
-            Welcome back, {sessionPatient.name}! 👋
-          </h1>
-          <p style={{ color: COLORS.muted }}>
-            Manage your health appointments and records
-            {sessionPatient.patientId && (
-              <span style={{ display: "block", fontSize: 12, marginTop: 6, opacity: 0.9 }}>
-                Patient ID: <span style={{ fontFamily: "monospace", color: COLORS.accent }}>{sessionPatient.patientId}</span>
-                {" · "}On-chain ID (MetaMask): <span style={{ fontFamily: "monospace" }}>{getChainPatientId()}</span>
-              </span>
-            )}
-          </p>
+          <h1 style={{ color: COLORS.text, fontSize: 28, fontWeight: 800, marginBottom: 4 }}>Welcome back, {sessionPatient.name}! 👋</h1>
+          {patientId
+            ? <p style={{ color: COLORS.muted, fontSize: 12 }}>Patient ID: <span style={{ fontFamily: "monospace", color: COLORS.accent }}>{patientId}</span></p>
+            : <p style={{ color: COLORS.red, fontSize: 13, marginTop: 6 }}>⚠️ Not logged in — please log in to view your data</p>
+          }
         </div>
 
         {/* Stats */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 28 }}>
           {[
-            { label: "Upcoming Appointments", value: appointments.length || bookedTokens.length || "0", icon: "📅", color: COLORS.accent },
-            { label: "Health Reports",         value: displayReports.length, icon: "📋", color: COLORS.green },
-            { label: "Tokens Issued",          value: bookedTokens.length,   icon: "🎟️", color: COLORS.accent2 },
-            { label: "Notifications",          value: "3",                   icon: "🔔", color: COLORS.yellow },
+            { label: "Upcoming Appointments", value: appointments.length + bookedTokens.length, icon: "📅", color: COLORS.accent },
+            { label: "Health Reports",         value: reports.length,      icon: "📋", color: COLORS.green },
+            { label: "Booked Tokens",          value: bookedTokens.length, icon: "🎟️", color: COLORS.accent2 },
+            { label: "Doctors Available",      value: doctors.length,      icon: "👨‍⚕️", color: COLORS.yellow },
           ].map(s => (
             <div key={s.label} style={cardStyle}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div>
-                  <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 6 }}>{s.label}</p>
-                  <p style={{ color: s.color, fontSize: 32, fontWeight: 800, fontFamily: "monospace" }}>{s.value}</p>
-                </div>
+                <div><p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 6 }}>{s.label}</p><p style={{ color: s.color, fontSize: 32, fontWeight: 800, fontFamily: "monospace" }}>{s.value}</p></div>
                 <span style={{ fontSize: 28 }}>{s.icon}</span>
               </div>
             </div>
           ))}
         </div>
 
-        {/* My Tokens */}
+        {/* Booked tokens */}
         {bookedTokens.length > 0 && (
           <div style={{ ...cardStyle, marginBottom: 28 }}>
             <h3 style={{ color: COLORS.text, fontWeight: 700, fontSize: 16, marginBottom: 16 }}>🎟️ My Appointment Tokens</h3>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px,1fr))", gap: 12 }}>
               {bookedTokens.map((entry, i) => (
                 <div key={i} style={{ background: COLORS.bg, border: `1px solid ${COLORS.accent}30`, borderRadius: 12, padding: 16 }}>
                   <div style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 800, color: COLORS.accent, marginBottom: 8, letterSpacing: 2 }}>{entry.token}</div>
@@ -624,390 +388,179 @@ export function PatientDashboard() {
           </div>
         )}
 
-        {/* Main grid */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 20, marginBottom: 28 }}>
-
-          {/* Left: Book Appointment */}
+          {/* Book Appointment */}
           <div style={cardStyle}>
             <h3 style={{ color: COLORS.text, fontWeight: 700, fontSize: 16, marginBottom: 4 }}>🗓️ Book Appointment</h3>
-            <p style={{ color: COLORS.muted, fontSize: 13, marginBottom: 16 }}>Browse doctors, view specializations, and book your slot</p>
+            <p style={{ color: COLORS.muted, fontSize: 13, marginBottom: 14 }}>Browse registered doctors and book your slot</p>
 
-            {/* Specialty filter */}
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
-              {specialties.map(spec => (
-                <button key={spec} onClick={() => setFilterSpec(spec)} style={{
-                  padding: "5px 12px", borderRadius: 20, fontSize: 12, cursor: "pointer",
-                  border: `1px solid ${filterSpec === spec ? COLORS.accent : COLORS.cardBorder}`,
-                  background: filterSpec === spec ? `${COLORS.accent}15` : "transparent",
-                  color: filterSpec === spec ? COLORS.accent : COLORS.muted,
-                  fontWeight: filterSpec === spec ? 700 : 400,
-                }}>{spec}</button>
-              ))}
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ color: COLORS.muted, fontSize: 12, display: "block", marginBottom: 6 }}>Appointment Date</label>
+              <input type="date" value={selectedDate} min={new Date().toISOString().slice(0, 10)} onChange={e => setSelectedDate(e.target.value)} style={{ background: COLORS.bg, border: `1px solid ${COLORS.cardBorder}`, color: COLORS.text, padding: "8px 12px", borderRadius: 8, fontSize: 13, outline: "none" }} />
             </div>
 
-            {/* Doctor cards */}
-            <div style={{ display: "grid", gap: 12, marginBottom: 20 }}>
-              {filteredDoctors.map(doc => {
-                // ✅ Safe arrays for each doctor
-                const docTags = Array.isArray(doc.tags) ? doc.tags : [];
-                const docLanguages = Array.isArray(doc.languages) ? doc.languages : [];
-                const docAvailability = Array.isArray(doc.availability) ? doc.availability : [];
+            {specialties.length > 1 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+                {specialties.map(spec => (
+                  <button key={spec} onClick={() => setFilterSpec(spec)} style={{ padding: "5px 12px", borderRadius: 20, fontSize: 12, cursor: "pointer", border: `1px solid ${filterSpec === spec ? COLORS.accent : COLORS.cardBorder}`, background: filterSpec === spec ? `${COLORS.accent}15` : "transparent", color: filterSpec === spec ? COLORS.accent : COLORS.muted, fontWeight: filterSpec === spec ? 700 : 400 }}>{spec}</button>
+                ))}
+              </div>
+            )}
 
-                return (
-                  <div
-                    key={doc.id}
-                    style={{
-                      borderRadius: 14, border: `1px solid ${selectedDoctor?.id === doc.id ? COLORS.accent : COLORS.cardBorder}`,
-                      background: selectedDoctor?.id === doc.id ? `${COLORS.accent}06` : COLORS.bg,
-                      overflow: "hidden",
-                    }}
-                  >
-                    <div
-                      onClick={() => { setSelectedDoctor(doc); setSelectedTime(""); }}
-                      style={{ padding: 14, cursor: "pointer", display: "flex", gap: 14, alignItems: "flex-start" }}
-                    >
-                      <Avatar name={doc.name || "Unknown"} size={52} />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                          <div>
-                            <p style={{ color: COLORS.text, fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{doc.name}</p>
-                            <p style={{ color: COLORS.accent, fontSize: 12, marginBottom: 3 }}>{doc.specialty} · {doc.hospital}</p>
-                            <p style={{ color: COLORS.muted, fontSize: 12 }}>{doc.experience} · {doc.education}</p>
+            {loading
+              ? <p style={{ color: COLORS.muted, textAlign: "center", padding: 24 }}>Loading doctors...</p>
+              : filteredDoctors.length === 0
+                ? <EmptyState icon="👨‍⚕️" title="No doctors registered yet" message="Doctors appear here after they sign up and register on MediChain." />
+                : (
+                  <div style={{ display: "grid", gap: 12, marginBottom: 20 }}>
+                    {filteredDoctors.map(doc => {
+                      const docId      = doc.id || doc._id || String(doc.name);
+                      const isSelected = selectedDoctor && (selectedDoctor.id === docId || selectedDoctor._id === docId);
+                      const avail      = Array.isArray(doc.availability) ? doc.availability : [];
+                      return (
+                        <div key={docId} style={{ borderRadius: 14, border: `1px solid ${isSelected ? COLORS.accent : COLORS.cardBorder}`, background: isSelected ? `${COLORS.accent}06` : COLORS.bg, overflow: "hidden" }}>
+                          <div onClick={() => { setSelectedDoctor({ ...doc, id: docId }); setSelectedTime(""); }} style={{ padding: 14, cursor: "pointer", display: "flex", gap: 14, alignItems: "flex-start" }}>
+                            <Avatar name={doc.name} size={52} />
+                            <div style={{ flex: 1 }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                                <div>
+                                  <p style={{ color: COLORS.text, fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{doc.name}</p>
+                                  <p style={{ color: COLORS.accent, fontSize: 12, marginBottom: 3 }}>{doc.specialty} {doc.hospital && `· ${doc.hospital}`}</p>
+                                  {doc.experience > 0 && <p style={{ color: COLORS.muted, fontSize: 12 }}>{doc.experience} yrs experience</p>}
+                                </div>
+                                {doc.fee > 0 && (
+                                  <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 12 }}>
+                                    <p style={{ color: COLORS.green, fontWeight: 800, fontSize: 15 }}>₹{doc.fee}</p>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            {isSelected && <span style={{ color: COLORS.accent, fontSize: 20, flexShrink: 0 }}>✓</span>}
                           </div>
-                          <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 12 }}>
-                            <p style={{ color: COLORS.green, fontWeight: 800, fontSize: 15 }}>₹{doc.fee}</p>
-                            <p style={{ color: COLORS.muted, fontSize: 10 }}>per consult</p>
-                            <p style={{ color: COLORS.yellow, fontSize: 12, marginTop: 4 }}>⭐ {doc.rating} ({doc.reviewCount})</p>
+
+                          <div style={{ padding: "0 14px 12px", display: "flex", gap: 8 }}>
+                            <button onClick={e => { e.stopPropagation(); setModalDoctor({ ...doc, id: docId }); }} style={{ padding: "5px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", border: `1px solid ${COLORS.cardBorder}`, background: "transparent", color: COLORS.muted }}>👤 View Profile</button>
+                            {avail.length > 0 && <span style={{ padding: "5px 10px", borderRadius: 8, fontSize: 11, background: `${COLORS.green}15`, color: COLORS.green }}>🟢 {avail.length} slots</span>}
                           </div>
-                        </div>
-                        {/* Tags — FIXED */}
-                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 8 }}>
-                          {docTags.slice(0, 3).map(tag => (
-                            <span key={tag} style={{
-                              background: `${COLORS.accent2}15`, color: "#a78bfa",
-                              border: `1px solid ${COLORS.accent2}25`,
-                              padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 600,
-                            }}>{tag}</span>
-                          ))}
-                          {docLanguages.length > 0 && (
-                            <span style={{ color: COLORS.muted, fontSize: 10, alignSelf: "center" }}>
-                              🗣️ {docLanguages.join(", ")}
-                            </span>
+
+                          {isSelected && (
+                            <div style={{ borderTop: `1px solid ${COLORS.cardBorder}`, padding: 14, background: `${COLORS.accent}04` }}>
+                              <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 10, fontWeight: 600 }}>🕐 Available Time Slots</p>
+                              {avail.length > 0
+                                ? (
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+                                    {avail.map(t => (
+                                      <button key={t} onClick={() => setSelectedTime(t)} style={{ padding: "8px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer", border: `1px solid ${selectedTime === t ? COLORS.accent : COLORS.cardBorder}`, background: selectedTime === t ? `${COLORS.accent}20` : COLORS.bg, color: selectedTime === t ? COLORS.accent : COLORS.text, fontWeight: selectedTime === t ? 700 : 400 }}>{t}</button>
+                                    ))}
+                                  </div>
+                                )
+                                : <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 14 }}>No time slots set by this doctor yet.</p>
+                              }
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "10px 14px", background: COLORS.bg, borderRadius: 10, border: `1px solid ${COLORS.cardBorder}` }}>
+                                <span style={{ color: COLORS.text, fontSize: 13 }}>🚨 Emergency Priority</span>
+                                <div onClick={() => setIsEmergency(!isEmergency)} style={{ width: 44, height: 24, borderRadius: 12, position: "relative", cursor: "pointer", background: isEmergency ? COLORS.red : COLORS.cardBorder }}>
+                                  <div style={{ width: 18, height: 18, borderRadius: "50%", background: "#fff", position: "absolute", top: 3, left: isEmergency ? 23 : 3, transition: "left 0.2s" }} />
+                                </div>
+                              </div>
+                              {selectedTime
+                                ? <button onClick={() => setShowPayment(true)} style={{ width: "100%", padding: "12px", background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`, border: "none", color: "#fff", fontSize: 15, fontWeight: 700, borderRadius: 10, cursor: "pointer" }}>💳 Proceed to Pay ₹{isEmergency ? Math.round((doc.fee || 0) * 1.5) : doc.fee}</button>
+                                : <p style={{ color: COLORS.muted, fontSize: 13, textAlign: "center" }}>← Select a time slot to continue</p>
+                              }
+                            </div>
                           )}
                         </div>
-                      </div>
-                      {selectedDoctor?.id === doc.id && (
-                        <span style={{ color: COLORS.accent, fontSize: 20, flexShrink: 0 }}>✓</span>
-                      )}
-                    </div>
-
-                    <div style={{ padding: "0 14px 12px", display: "flex", gap: 8 }}>
-                      <button
-                        onClick={e => { e.stopPropagation(); setModalDoctor(doc); }}
-                        style={{
-                          padding: "5px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer",
-                          border: `1px solid ${COLORS.cardBorder}`, background: "transparent",
-                          color: COLORS.muted,
-                        }}
-                      >👤 View Full Profile</button>
-                      <span style={{
-                        padding: "5px 10px", borderRadius: 8, fontSize: 11,
-                        background: `${COLORS.green}15`, color: COLORS.green,
-                      }}>
-                        🟢 {docAvailability.length} slots today
-                      </span>
-                    </div>
-
-                    {selectedDoctor?.id === doc.id && (
-                      <div style={{ borderTop: `1px solid ${COLORS.cardBorder}`, padding: 14, background: `${COLORS.accent}04` }}>
-                        <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 10, fontWeight: 600 }}>🕐 Available Time Slots</p>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
-                          {docAvailability.map(t => (
-                            <button key={t} onClick={() => setSelectedTime(t)} style={{
-                              padding: "8px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
-                              border: `1px solid ${selectedTime === t ? COLORS.accent : COLORS.cardBorder}`,
-                              background: selectedTime === t ? `${COLORS.accent}20` : COLORS.bg,
-                              color: selectedTime === t ? COLORS.accent : COLORS.text,
-                              fontWeight: selectedTime === t ? 700 : 400,
-                            }}>{t}</button>
-                          ))}
-                        </div>
-
-                        <div style={{
-                          display: "flex", justifyContent: "space-between", alignItems: "center",
-                          marginBottom: 12, padding: "10px 14px", background: COLORS.bg,
-                          borderRadius: 10, border: `1px solid ${COLORS.cardBorder}`,
-                        }}>
-                          <span style={{ color: COLORS.text, fontSize: 13 }}>🚨 Emergency Priority</span>
-                          <div
-                            onClick={() => setIsEmergency(!isEmergency)}
-                            style={{
-                              width: 44, height: 24, borderRadius: 12, position: "relative", cursor: "pointer",
-                              background: isEmergency ? COLORS.red : COLORS.cardBorder, transition: "background 0.2s",
-                            }}
-                          >
-                            <div style={{
-                              width: 18, height: 18, borderRadius: "50%", background: "#fff",
-                              position: "absolute", top: 3, left: isEmergency ? 23 : 3, transition: "left 0.2s",
-                            }} />
-                          </div>
-                        </div>
-
-                        {isEmergency && (
-                          <div style={{ padding: 10, background: `${COLORS.red}11`, border: `1px solid ${COLORS.red}33`, borderRadius: 10, color: COLORS.red, fontSize: 12, marginBottom: 12 }}>
-                            🚨 Emergency adds 50% surcharge (₹{doc.fee} → ₹{Math.round(doc.fee * 1.5)}). You'll be placed #1 in queue.
-                          </div>
-                        )}
-
-                        {selectedTime ? (
-                          <button
-                            onClick={() => setShowPayment(true)}
-                            style={{
-                              width: "100%", padding: "12px",
-                              background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`,
-                              border: "none", color: "#fff", fontSize: 15, fontWeight: 700,
-                              borderRadius: 10, cursor: "pointer",
-                            }}
-                          >
-                            💳 Proceed to Pay ₹{isEmergency ? Math.round(doc.fee * 1.5) : doc.fee}
-                          </button>
-                        ) : (
-                          <p style={{ color: COLORS.muted, fontSize: 13, textAlign: "center" }}>← Select a time slot above to continue</p>
-                        )}
-                      </div>
-                    )}
+                      );
+                    })}
                   </div>
-                );
-              })}
-            </div>
+                )
+            }
           </div>
 
           {/* Right column */}
           <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <div style={cardStyle}>
-              <h3 style={{ color: COLORS.text, fontWeight: 700, fontSize: 15, marginBottom: 16 }}>🔔 Notifications</h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {[
-                  { icon: "✅", color: COLORS.accent,  bg: `${COLORS.accent}10`,  title: "Appointment Confirmed",  desc: "Your appointment with Dr. Johnson is scheduled" },
-                  { icon: "📄", color: COLORS.green,   bg: `${COLORS.green}10`,   title: "New Report Available",   desc: "Blood test results have been uploaded" },
-                  { icon: "🕐", color: COLORS.yellow,  bg: `${COLORS.yellow}10`,  title: "Appointment Reminder",   desc: "Tomorrow at 10:30 AM" },
-                ].map(n => (
-                  <div key={n.title} style={{ display: "flex", gap: 10, padding: 12, borderRadius: 10, background: n.bg }}>
-                    <span style={{ fontSize: 16 }}>{n.icon}</span>
-                    <div>
-                      <p style={{ color: COLORS.text, fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{n.title}</p>
-                      <p style={{ color: COLORS.muted, fontSize: 12 }}>{n.desc}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <h3 style={{ color: COLORS.text, fontWeight: 700, fontSize: 15, marginBottom: 14 }}>Quick Actions</h3>
+              <Link to="/patient/upload" style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderRadius: 10, border: `1px solid ${COLORS.cardBorder}`, color: COLORS.text, fontSize: 14, textDecoration: "none", background: COLORS.bg, marginBottom: 8 }}>📤 Upload Health Report</Link>
+              <button onClick={() => setActiveTab("reports")} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderRadius: 10, border: `1px solid ${COLORS.cardBorder}`, color: COLORS.text, fontSize: 14, background: COLORS.bg, cursor: "pointer", width: "100%" }}>📋 View All Reports ({reports.length})</button>
             </div>
-
-            <div style={cardStyle}>
-              <h3 style={{ color: COLORS.text, fontWeight: 700, fontSize: 15, marginBottom: 14 }}>🏥 Available Specialists</h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {specialties.length > 1 && (
+              <div style={cardStyle}>
+                <h3 style={{ color: COLORS.text, fontWeight: 700, fontSize: 15, marginBottom: 14 }}>🏥 Specialties</h3>
                 {specialties.filter(s => s !== "All").map(spec => {
-                  const count = displayDoctors.filter(d => d.specialty === spec).length;
+                  const count = doctors.filter(d => d.specialty === spec).length;
                   return (
-                    <div key={spec} onClick={() => setFilterSpec(spec)} style={{
-                      display: "flex", justifyContent: "space-between", alignItems: "center",
-                      padding: "9px 12px", borderRadius: 10, cursor: "pointer",
-                      background: filterSpec === spec ? `${COLORS.accent}10` : COLORS.bg,
-                      border: `1px solid ${filterSpec === spec ? COLORS.accent + "40" : COLORS.cardBorder}`,
-                    }}>
+                    <div key={spec} onClick={() => setFilterSpec(spec)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 12px", borderRadius: 10, cursor: "pointer", marginBottom: 6, background: filterSpec === spec ? `${COLORS.accent}10` : COLORS.bg, border: `1px solid ${filterSpec === spec ? COLORS.accent + "40" : COLORS.cardBorder}` }}>
                       <span style={{ color: filterSpec === spec ? COLORS.accent : COLORS.text, fontSize: 13 }}>{spec}</span>
-                      <span style={{ color: COLORS.muted, fontSize: 12, background: COLORS.card, padding: "2px 8px", borderRadius: 10 }}>{count} doctor{count > 1 ? "s" : ""}</span>
+                      <span style={{ color: COLORS.muted, fontSize: 12, background: COLORS.card, padding: "2px 8px", borderRadius: 10 }}>{count}</span>
                     </div>
                   );
                 })}
               </div>
-            </div>
-
-            <div style={cardStyle}>
-              <h3 style={{ color: COLORS.text, fontWeight: 700, fontSize: 15, marginBottom: 14 }}>Quick Actions</h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <Link to="/patient/upload" style={{
-                  display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderRadius: 10,
-                  border: `1px solid ${COLORS.cardBorder}`, color: COLORS.text, fontSize: 14, textDecoration: "none", background: COLORS.bg,
-                }}>📤 Upload Health Report</Link>
-                <button onClick={() => setActiveTab("reports")} style={{
-                  display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderRadius: 10,
-                  border: `1px solid ${COLORS.cardBorder}`, color: COLORS.text, fontSize: 14, background: COLORS.bg, cursor: "pointer", width: "100%",
-                }}>📋 View All Reports</button>
-              </div>
-            </div>
+            )}
           </div>
         </div>
 
         {/* Health Reports */}
         <div style={cardStyle}>
           <h3 style={{ color: COLORS.text, fontWeight: 700, fontSize: 16, marginBottom: 4 }}>📋 My Health Reports</h3>
-          <p style={{ color: COLORS.muted, fontSize: 13, marginBottom: 14 }}>View your uploaded reports and AI summaries</p>
-          <div style={{
-            marginBottom: 20, padding: 14, borderRadius: 12,
-            background: `${COLORS.accent}08`, border: `1px solid ${COLORS.accent}25`,
-            fontSize: 13, lineHeight: 1.55, color: COLORS.text,
-          }}>
-            <p style={{ fontWeight: 700, marginBottom: 6, color: COLORS.accent }}>⛓️ How blockchain verification works</p>
-            <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 8 }}>
-              When you upload, the app saves the PDF/report in the hospital API and computes a <strong style={{ color: COLORS.text }}>tamper-evident hash</strong>.
-              That hash can be written to your <strong style={{ color: COLORS.text }}>PatientRecords</strong> smart contract.
-              <strong> Verify on chain</strong> recomputes the same hash from this record and checks it exists on-chain for your numeric patient ID — so you know the file metadata was not altered after anchoring.
-            </p>
-            <p style={{ color: COLORS.yellow, fontSize: 11 }}>
-              Note: MetaMask must reach a working RPC, and the patient ID used on-chain must match your account ({getChainPatientId()}).
-            </p>
-          </div>
+          <p style={{ color: COLORS.muted, fontSize: 13, marginBottom: 14 }}>
+            {!patientId ? "Log in to view your reports" : reports.length === 0 ? "No reports yet — upload your first report" : `${reports.length} report${reports.length !== 1 ? "s" : ""} on file`}
+          </p>
 
           <div style={{ display: "flex", gap: 4, marginBottom: 20, background: COLORS.bg, padding: 4, borderRadius: 10, width: "fit-content" }}>
-            {[
-              { key: "reports", label: `All Reports (${displayReports.length})` },
-              { key: "summary", label: "AI Summary" },
-            ].map(tab => (
-              <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
-                padding: "8px 18px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 13,
-                background: activeTab === tab.key ? COLORS.card : "transparent",
-                color: activeTab === tab.key ? COLORS.text : COLORS.muted,
-                fontWeight: activeTab === tab.key ? 700 : 400,
-                boxShadow: activeTab === tab.key ? `0 1px 4px ${COLORS.cardBorder}` : "none",
-              }}>{tab.label}</button>
+            {[{ key: "reports", label: `All Reports (${reports.length})` }, { key: "summary", label: "AI Summary" }].map(tab => (
+              <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{ padding: "8px 18px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 13, background: activeTab === tab.key ? COLORS.card : "transparent", color: activeTab === tab.key ? COLORS.text : COLORS.muted, fontWeight: activeTab === tab.key ? 700 : 400 }}>{tab.label}</button>
             ))}
           </div>
 
           {activeTab === "reports" && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-              {displayReports.map((report, idx) => (
-                <div
-                  key={report.id}
-                  onClick={() => { setSelectedReport(report); setActiveTab("summary"); }}
-                  style={{ padding: 16, borderRadius: 12, cursor: "pointer", border: `1px solid ${COLORS.cardBorder}`, background: COLORS.bg, transition: "border-color 0.2s" }}
-                  onMouseEnter={e => e.currentTarget.style.borderColor = COLORS.accent}
-                  onMouseLeave={e => e.currentTarget.style.borderColor = COLORS.cardBorder}
-                >
-                  <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-                    <div style={{ width: 44, height: 44, borderRadius: 10, flexShrink: 0, background: `${COLORS.accent}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📄</div>
-                    <div style={{ flex: 1 }}>
-                      <p style={{ color: COLORS.text, fontWeight: 600, fontSize: 13, marginBottom: 6 }}>{report.fileName}</p>
-                      <span style={{ background: `${COLORS.accent2}20`, color: "#a78bfa", border: `1px solid ${COLORS.accent2}30`, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{report.category}</span>
-                      <p style={{ color: COLORS.muted, fontSize: 11, marginTop: 6 }}>Uploaded: {new Date(report.uploadDate).toLocaleDateString()}</p>
-                      <button
-                        onClick={e => { e.stopPropagation(); handleVerifyReport(report, idx); }}
-                        disabled={verifyStatus[idx] === "checking"}
-                        style={{
-                          marginTop: 8, fontSize: 11, padding: "3px 10px", borderRadius: 6, cursor: "pointer", border: "none",
-                          background: verifyStatus[idx] === "verified" ? `${COLORS.green}22` : verifyStatus[idx] === "failed" ? `${COLORS.red}22` : `${COLORS.accent}22`,
-                          color: verifyStatus[idx] === "verified" ? COLORS.green : verifyStatus[idx] === "failed" ? COLORS.red : COLORS.accent,
-                        }}
+            reports.length === 0
+              ? <EmptyState icon="📂" title="No reports yet" message="Upload your medical documents using the Upload Report button above. They will appear here." />
+              : (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                  {reports.map((report, idx) => {
+                    const hasFile = !!(report.ipfsUrl || report.id);
+                    return (
+                      <div key={report.id || idx} style={{ padding: 16, borderRadius: 12, border: `1px solid ${COLORS.cardBorder}`, background: COLORS.bg, cursor: "pointer", transition: "border-color 0.15s" }}
+                        onMouseEnter={e => e.currentTarget.style.borderColor = COLORS.accent}
+                        onMouseLeave={e => e.currentTarget.style.borderColor = COLORS.cardBorder}
+                        onClick={() => { setSelectedReport(report); setActiveTab("summary"); }}
                       >
-                        {verifyStatus[idx] === "checking" ? "⛓️ Checking..." : verifyStatus[idx] === "verified" ? "✅ Blockchain Verified" : verifyStatus[idx] === "failed" ? "⚠️ Hash Mismatch" : "🔍 Verify on Chain"}
-                      </button>
-                    </div>
-                  </div>
+                        <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                          <div style={{ width: 44, height: 44, borderRadius: 10, flexShrink: 0, background: `${COLORS.accent}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📄</div>
+                          <div style={{ flex: 1 }}>
+                            <p style={{ color: COLORS.text, fontWeight: 600, fontSize: 13, marginBottom: 6 }}>{report.fileName || "Report"}</p>
+                            <span style={{ background: `${COLORS.accent2}20`, color: "#a78bfa", border: `1px solid ${COLORS.accent2}30`, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{report.category || "General"}</span>
+                            <p style={{ color: COLORS.muted, fontSize: 11, marginTop: 6 }}>{report.uploadDate || "—"}</p>
+                            {(report.hash || report.blockchainHash) && (
+                              <p style={{ color: COLORS.muted, fontSize: 10, fontFamily: "monospace", marginTop: 2 }}>⛓️ {String(report.hash || report.blockchainHash).slice(0, 20)}...</p>
+                            )}
+                            <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }} onClick={e => e.stopPropagation()}>
+                              {hasFile && (
+                                <button onClick={() => setViewerRecord({ id: report.id, fileName: report.fileName, ipfsUrl: report.ipfsUrl })} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, cursor: "pointer", border: `1px solid ${COLORS.accent}40`, background: `${COLORS.accent}15`, color: COLORS.accent, fontWeight: 600 }}>📄 View</button>
+                              )}
+                              <button onClick={() => handleVerifyReport(report, idx)} disabled={verifyStatus[idx] === "checking"} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, cursor: "pointer", border: "none", background: verifyStatus[idx] === "verified" ? `${COLORS.green}22` : verifyStatus[idx] === "failed" ? `${COLORS.red}22` : `${COLORS.accent}22`, color: verifyStatus[idx] === "verified" ? COLORS.green : verifyStatus[idx] === "failed" ? COLORS.red : COLORS.accent }}>
+                                {verifyStatus[idx] === "checking" ? "Checking..." : verifyStatus[idx] === "verified" ? "✅ Verified" : verifyStatus[idx] === "failed" ? "⚠️ Mismatch" : "🔍 Verify"}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
+              )
           )}
 
           {activeTab === "summary" && (
             selectedReport?.aiSummary
               ? <AISummaryCard summary={selectedReport.aiSummary} />
-              : (
-                <div style={{ textAlign: "center", padding: 48, color: COLORS.muted }}>
-                  <div style={{ fontSize: 40, marginBottom: 14 }}>📄</div>
-                  <p>No AI summary available for this report yet.</p>
-                  <p style={{ fontSize: 13, marginTop: 6 }}>Processing may take a few minutes.</p>
-                </div>
-              )
+              : <EmptyState icon="📄" message="No AI summary available for this report yet." />
           )}
         </div>
       </div>
     </div>
   );
 }
-
-// ── Mock Data ─────────────────────────────────────────────────────────────────
-const mockDoctors = [
-  {
-    id: "DOC-001", name: "Dr. Ananya Singh", specialty: "Cardiology",
-    hospital: "AIIMS Delhi", rating: 4.8, reviewCount: 247,
-    experience: "12 yrs", education: "MBBS, MD (Cardiology)",
-    fee: 800, image: "👩‍⚕️",
-    bio: "Senior Cardiologist specializing in interventional cardiology, heart failure management, and preventive cardiac care. Has performed over 2,000 successful angioplasty procedures.",
-    tags: ["Heart Failure", "Interventional", "Preventive Care", "ECG"],
-    languages: ["English", "Hindi", "Punjabi"],
-    availability: ["9:00 AM", "10:30 AM", "2:00 PM", "4:00 PM"],
-    reviews: [
-      { name: "Ramesh K.", rating: 5, comment: "Excellent doctor. Explained everything very clearly and the treatment worked perfectly." },
-      { name: "Sunita M.", rating: 5, comment: "Very thorough and caring. Highly recommend for any heart-related issues." },
-      { name: "Ajay P.", rating: 4, comment: "Great expertise. Had to wait a bit but worth it." },
-    ],
-  },
-  {
-    id: "DOC-002", name: "Dr. Vikram Patel", specialty: "Dermatology",
-    hospital: "Fortis Hospital", rating: 4.5, reviewCount: 183,
-    experience: "8 yrs", education: "MBBS, DVD (Dermatology)",
-    fee: 600, image: "👨‍⚕️",
-    bio: "Expert in acne management, eczema, psoriasis, skin cancer screening, and cosmetic dermatology including chemical peels and laser treatments.",
-    tags: ["Acne", "Eczema", "Skin Cancer", "Cosmetic"],
-    languages: ["English", "Gujarati", "Hindi"],
-    availability: ["11:00 AM", "1:00 PM", "3:30 PM", "5:00 PM"],
-    reviews: [
-      { name: "Priya S.", rating: 5, comment: "My acne cleared up within 2 months of treatment. Amazing results!" },
-      { name: "Karan T.", rating: 4, comment: "Very knowledgeable doctor, gives detailed explanations." },
-      { name: "Meera R.", rating: 4, comment: "Good experience overall. The clinic is well-maintained." },
-    ],
-  },
-  {
-    id: "DOC-003", name: "Dr. Meena Roy", specialty: "Orthopedics",
-    hospital: "Apollo Hospital", rating: 4.9, reviewCount: 312,
-    experience: "15 yrs", education: "MBBS, MS (Ortho), FRCS",
-    fee: 1000, image: "👩‍⚕️",
-    bio: "Renowned orthopedic surgeon specializing in joint replacement, sports injuries, and spine disorders. Has successfully performed 3,500+ joint replacement surgeries.",
-    tags: ["Joint Replacement", "Spine", "Sports Injury", "Arthroscopy"],
-    languages: ["English", "Bengali", "Hindi"],
-    availability: ["9:30 AM", "11:30 AM", "2:30 PM"],
-    reviews: [
-      { name: "Anand V.", rating: 5, comment: "My knee replacement surgery was a huge success. Back to normal life!" },
-      { name: "Lakshmi N.", rating: 5, comment: "Best orthopedic surgeon in Delhi. Very professional." },
-      { name: "Deepak M.", rating: 5, comment: "Outstanding care before, during, and after the surgery." },
-    ],
-  },
-  {
-    id: "DOC-004", name: "Dr. Suresh Nair", specialty: "Neurology",
-    hospital: "Medanta Hospital", rating: 4.7, reviewCount: 198,
-    experience: "10 yrs", education: "MBBS, DM (Neurology)",
-    fee: 900, image: "👨‍⚕️",
-    bio: "Specialist in movement disorders, epilepsy, stroke management, and neuro-rehabilitation. Pioneered advanced EMG techniques at Medanta.",
-    tags: ["Epilepsy", "Stroke", "Movement Disorders", "Migraine"],
-    languages: ["English", "Malayalam", "Hindi"],
-    availability: ["10:00 AM", "12:00 PM", "3:00 PM", "5:30 PM"],
-    reviews: [
-      { name: "Rohit G.", rating: 5, comment: "Correctly diagnosed my condition when others couldn't. Life-changing!" },
-      { name: "Fatima S.", rating: 4, comment: "Very patient and explains everything in simple language." },
-      { name: "Vinod K.", rating: 5, comment: "Exceptional neurologist. Highly recommended for any brain or nerve issues." },
-    ],
-  },
-  {
-    id: "DOC-005", name: "Dr. Priya Sharma", specialty: "Pediatrics",
-    hospital: "Rainbow Children's Hospital", rating: 4.6, reviewCount: 156,
-    experience: "9 yrs", education: "MBBS, MD (Pediatrics)",
-    fee: 500, image: "👩‍⚕️",
-    bio: "Dedicated pediatrician with expertise in child nutrition, developmental disorders, respiratory infections, and neonatal care. Known for her gentle approach with children.",
-    tags: ["Neonatal Care", "Child Nutrition", "Vaccinations", "Development"],
-    languages: ["English", "Hindi", "Marathi"],
-    availability: ["9:00 AM", "11:00 AM", "2:00 PM", "4:30 PM"],
-    reviews: [
-      { name: "Neha K.", rating: 5, comment: "Dr. Priya is amazing with kids. My daughter loves going to her!" },
-      { name: "Sanjay M.", rating: 5, comment: "Very thorough with vaccinations and follow-ups. Highly recommended." },
-      { name: "Rita D.", rating: 4, comment: "Very caring and patient with young children." },
-    ],
-  },
-];
-
-const mockReports = [
-  { id: "R001", fileName: "Blood_Test_March2026.pdf", category: "Blood Test", uploadDate: "2026-03-01", aiSummary: { keyFindings: ["Cholesterol slightly elevated at 210 mg/dL", "Blood glucose normal at 95 mg/dL", "Hemoglobin within range at 14.5 g/dL"], plainLanguage: "Your blood test shows mostly good results. Blood sugar and red blood cells are healthy. Cholesterol is slightly high — manageable with diet and exercise.", recommendedSteps: ["Reduce saturated fat intake", "30 min daily exercise", "Follow-up in 3 months"] } },
-  { id: "R002", fileName: "Chest_Xray_Feb2026.pdf", category: "X-Ray", uploadDate: "2026-02-14", aiSummary: { keyFindings: ["No abnormalities detected", "Lung fields clear", "Heart size normal"], plainLanguage: "Your chest X-ray looks completely normal. Lungs are clear and heart is a healthy size.", recommendedSteps: ["No immediate action required", "Routine check in 1 year"] } },
-  { id: "R003", fileName: "Prescription_Jan2026.pdf", category: "Prescription", uploadDate: "2026-01-20", aiSummary: null },
-];
 
 export default PatientDashboard;

@@ -78,9 +78,9 @@ export function DoctorSubmitPage() {
     try {
       const res  = await fetch(`${API}/patients`);
       const data = await res.json();
-      setPatients(Array.isArray(data) && data.length ? data : mockPatients);
+      setPatients(Array.isArray(data) ? data : []);
     } catch {
-      setPatients(mockPatients);
+      setPatients([]);
     }
     setPatientsLoaded(true);
   };
@@ -90,9 +90,9 @@ export function DoctorSubmitPage() {
     if (!patientsLoaded) loadPatients();
   };
 
-  const filteredPatients = (patientsLoaded ? patients : mockPatients).filter(p =>
-    p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+  const filteredPatients = patients.filter(p =>
+    (p.name || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (p.id || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
     (p.phone && p.phone.includes(searchQuery))
   );
 
@@ -434,13 +434,6 @@ export function DoctorSubmitPage() {
   );
 }
 
-// ── Fallback mock patients ─────────────────────────────────────────────────────
-const mockPatients = [
-  { id: "HLT-0x72A91B", name: "Arjun Sharma",  age: 34, gender: "Male",   phone: "+91 9876543210", email: "arjun@email.com",  blood: "B+" },
-  { id: "HLT-0x45F23C", name: "Priya Mehta",   age: 28, gender: "Female", phone: "+91 9812345678", email: "priya@email.com",  blood: "O+" },
-  { id: "HLT-0x91D78E", name: "Ravi Kumar",    age: 52, gender: "Male",   phone: "+91 9834567890", email: "ravi@email.com",   blood: "A-" },
-  { id: "HLT-0xB3C21F", name: "Sneha Patel",   age: 31, gender: "Female", phone: "+91 9856789012", email: "sneha@email.com",  blood: "AB+" },
-  { id: "HLT-0xD4E56A", name: "Mohan Verma",   age: 45, gender: "Male",   phone: "+91 9878901234", email: "mohan@email.com",  blood: "O-" },
-];
+
 
 export default DoctorSubmitPage;
