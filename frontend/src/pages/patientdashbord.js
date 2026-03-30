@@ -1,3 +1,4 @@
+// src/pages/PatientDashboard.jsx
 import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -7,7 +8,7 @@ const API = process.env.REACT_APP_API_URL || "http://localhost:5000/api";
 
 function authHeaders() {
   const token = localStorage.getItem("token");
-  return token ? { "Authorization": `Bearer ${token}` } : {};
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 function getStoredUser() {
   try { return JSON.parse(localStorage.getItem("user") || "{}"); } catch (_) { return {}; }
@@ -25,10 +26,8 @@ const COLORS = {
   accent: "#00d4ff", accent2: "#7c3aed", green: "#10b981",
   red: "#ef4444", yellow: "#f59e0b", text: "#e2e8f0", muted: "#64748b",
 };
-
 const cardStyle = { background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`, borderRadius: 16, padding: 24 };
 
-// ── Empty state ────────────────────────────────────────────────────────────────
 function EmptyState({ icon, title, message }) {
   return (
     <div style={{ textAlign: "center", padding: "40px 24px", color: COLORS.muted }}>
@@ -39,7 +38,6 @@ function EmptyState({ icon, title, message }) {
   );
 }
 
-// ── File Viewer modal ─────────────────────────────────────────────────────────
 function FileViewer({ recordId, fileName, ipfsUrl, onClose }) {
   const url = recordId ? `${API}/records/file/${recordId}` : ipfsUrl;
   if (!url) return null;
@@ -59,16 +57,15 @@ function FileViewer({ recordId, fileName, ipfsUrl, onClose }) {
       <div style={{ flex: 1, overflow: "hidden" }}>
         {isImage
           ? <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}><img src={url} alt={fileName} style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 12, objectFit: "contain" }} /></div>
-          : <iframe src={url} title={fileName} style={{ width: "100%", height: "100%", border: "none", background: "#fff" }} />}
+          : <iframe src={url} title={fileName} style={{ width: "100%", height: "100%", border: "none", background: "#fff" }} />
+        }
       </div>
     </div>
   );
 }
 
-function generateToken() { return `MCT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`; }
-
 function Avatar({ name, size = 48 }) {
-  const safe    = name || "Unknown";
+  const safe     = name || "Unknown";
   const initials = safe.split(" ").filter(w => w !== "Dr.").map(w => w[0]).join("").substring(0, 2);
   const palettes = [["#0e3a5c","#00d4ff"],["#2d1a5c","#7c3aed"],["#0a3d2e","#10b981"],["#3d2200","#f59e0b"],["#3d0a1a","#ef4444"]];
   const p = palettes[(safe.charCodeAt(4) || 0) % palettes.length];
@@ -102,11 +99,12 @@ function DoctorModal({ doctor, onClose, onSelect }) {
           <Avatar name={doctor.name} size={64} />
           <div style={{ flex: 1 }}>
             <h2 style={{ color: COLORS.text, fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{doctor.name}</h2>
-            <p style={{ color: COLORS.accent, fontSize: 13, marginBottom: 4 }}>{doctor.specialty} · {doctor.hospital}</p>
-            <p style={{ color: COLORS.muted, fontSize: 12 }}>{doctor.experience} yrs exp · {doctor.education}</p>
+            <p style={{ color: COLORS.accent, fontSize: 13, marginBottom: 4 }}>{doctor.specialty}{doctor.hospital ? ` · ${doctor.hospital}` : ""}</p>
+            {doctor.experience > 0 && <p style={{ color: COLORS.muted, fontSize: 12 }}>{doctor.experience} yrs exp{doctor.education ? ` · ${doctor.education}` : ""}</p>}
             <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
               {doctor.rating > 0 && <span style={{ color: COLORS.yellow, fontSize: 13 }}>⭐ {doctor.rating}</span>}
-              {doctor.fee > 0 && <span style={{ color: COLORS.green, fontSize: 13, fontWeight: 700 }}>₹{doctor.fee}/consult</span>}
+              {doctor.fee   > 0 && <span style={{ color: COLORS.green, fontSize: 13, fontWeight: 700 }}>₹{doctor.fee}/consult</span>}
+              {doctor.licenseVerified && <span style={{ color: COLORS.green, fontSize: 12 }}>✅ Verified</span>}
             </div>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", color: COLORS.muted, fontSize: 22, cursor: "pointer" }}>×</button>
@@ -134,9 +132,9 @@ function DoctorModal({ doctor, onClose, onSelect }) {
 }
 
 function PaymentModal({ doctor, time, date, isEmergency, patientId, onClose, onSuccess }) {
-  const [step, setStep]     = useState("payment");
+  const [step,   setStep]   = useState("payment");
   const [method, setMethod] = useState("card");
-  const [token, setToken]   = useState("");
+  const [token,  setToken]  = useState("");
   const totalFee = isEmergency ? Math.round((doctor.fee || 0) * 1.5) : (doctor.fee || 0);
 
   const handlePay = async () => {
@@ -146,9 +144,7 @@ function PaymentModal({ doctor, time, date, isEmergency, patientId, onClose, onS
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({
-          patientId,
           doctorId:      doctor.id || doctor._id,
-          doctorName:    doctor.name,
           date:          date || new Date().toISOString().slice(0, 10),
           time,
           type:          "Consultation",
@@ -158,11 +154,12 @@ function PaymentModal({ doctor, time, date, isEmergency, patientId, onClose, onS
           paymentMethod: method,
         }),
       });
-      const data   = await res.json();
-      const newTok = data.tokenId || data.blockchain || generateToken();
+      const data = await res.json();
+      // Use the real appointment ID as token reference
+      const newTok = data.id || data.blockchain || `MCT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
       setToken(newTok);
     } catch {
-      setToken(generateToken());
+      setToken(`MCT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`);
     }
     setStep("done");
   };
@@ -171,8 +168,8 @@ function PaymentModal({ doctor, time, date, isEmergency, patientId, onClose, onS
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ textAlign: "center", color: COLORS.text }}>
         <div style={{ fontSize: 48, marginBottom: 16 }}>⛓️</div>
-        <p style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Processing Payment...</p>
-        <p style={{ color: COLORS.muted, fontSize: 13 }}>Booking appointment</p>
+        <p style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Processing Payment…</p>
+        <p style={{ color: COLORS.muted, fontSize: 13 }}>Booking appointment with {doctor.name}</p>
       </div>
     </div>
   );
@@ -183,7 +180,7 @@ function PaymentModal({ doctor, time, date, isEmergency, patientId, onClose, onS
         <div style={{ fontSize: 56, marginBottom: 16 }}>🎉</div>
         <h2 style={{ color: COLORS.green, fontSize: 22, fontWeight: 800, marginBottom: 8 }}>Appointment Confirmed!</h2>
         <div style={{ background: COLORS.bg, border: `1px solid ${COLORS.accent}40`, borderRadius: 14, padding: 20, marginBottom: 24 }}>
-          <div style={{ fontFamily: "monospace", fontSize: 26, fontWeight: 800, color: COLORS.accent, letterSpacing: 3, marginBottom: 16, background: `${COLORS.accent}10`, padding: "10px 20px", borderRadius: 10 }}>{token}</div>
+          <div style={{ fontFamily: "monospace", fontSize: 22, fontWeight: 800, color: COLORS.accent, letterSpacing: 2, marginBottom: 16, background: `${COLORS.accent}10`, padding: "10px 20px", borderRadius: 10, wordBreak: "break-all" }}>{token}</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, textAlign: "left" }}>
             {[{ label: "Doctor", value: doctor.name }, { label: "Time", value: time }, { label: "Date", value: date }, { label: "Fee Paid", value: `₹${totalFee}` }].map(it => (
               <div key={it.label} style={{ background: COLORS.card, padding: "8px 12px", borderRadius: 8 }}>
@@ -250,6 +247,48 @@ function AISummaryCard({ summary }) {
   );
 }
 
+// ── Appointment card component ─────────────────────────────────────────────────
+function AppointmentCard({ appt }) {
+  const statusColor = {
+    confirmed:     COLORS.accent,
+    "in-progress": COLORS.green,
+    pending:       COLORS.yellow,
+    completed:     COLORS.muted,
+  }[appt.status] || COLORS.muted;
+
+  return (
+    <div style={{ padding: 16, borderRadius: 12, border: `1px solid ${appt.isEmergency ? COLORS.red + "55" : COLORS.cardBorder}`, background: appt.isEmergency ? `${COLORS.red}08` : COLORS.bg }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+        <div>
+          {/* Doctor name from DB */}
+          <p style={{ color: COLORS.text, fontWeight: 700, fontSize: 14, marginBottom: 3 }}>
+            Dr. {appt.doctorName || "Unknown Doctor"}
+          </p>
+          <p style={{ color: COLORS.accent, fontSize: 12 }}>{appt.specialty || appt.type}</p>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <span style={{ background: statusColor + "20", color: statusColor, border: `1px solid ${statusColor}40`, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
+            {appt.isEmergency ? "🚨 Emergency" : appt.status}
+          </span>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 16, fontSize: 12, color: COLORS.muted }}>
+        <span>📅 {appt.date}</span>
+        <span>🕐 {appt.time}</span>
+        {appt.fee > 0 && <span>💰 ₹{appt.fee}</span>}
+      </div>
+      {appt.notes && <p style={{ color: COLORS.muted, fontSize: 12, marginTop: 8, fontStyle: "italic" }}>{appt.notes}</p>}
+      {appt.blockchain && (
+        <p style={{ color: COLORS.accent, fontSize: 10, fontFamily: "monospace", marginTop: 8 }}>
+          ⛓️ {appt.blockchain.slice(0, 30)}…
+          {appt.blockchainTokenId && <span style={{ color: COLORS.green, marginLeft: 8 }}>🎟️ Token #{appt.blockchainTokenId}</span>}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Main export ───────────────────────────────────────────────────────────────
 export function PatientDashboard() {
   const navigate = useNavigate();
   const [sessionPatient, setSessionPatient] = useState(() => getSessionPatientProfile());
@@ -264,20 +303,20 @@ export function PatientDashboard() {
   const [isEmergency,    setIsEmergency]    = useState(false);
   const [modalDoctor,    setModalDoctor]    = useState(null);
   const [showPayment,    setShowPayment]    = useState(false);
-  const [bookedTokens,   setBookedTokens]  = useState([]);
-  const [filterSpec,     setFilterSpec]    = useState("All");
+  const [bookedTokens,   setBookedTokens]   = useState([]);
+  const [filterSpec,     setFilterSpec]     = useState("All");
 
   const [activeTab,      setActiveTab]      = useState("reports");
   const [selectedReport, setSelectedReport] = useState(null);
-  const [verifyStatus,   setVerifyStatus]  = useState({});
-  const [viewerRecord,   setViewerRecord]  = useState(null);
+  const [verifyStatus,   setVerifyStatus]   = useState({});
+  const [viewerRecord,   setViewerRecord]   = useState(null);
 
   const patientId = getStoredPatientId();
 
   useEffect(() => {
     const sync = () => setSessionPatient(getSessionPatientProfile());
     sync();
-    window.addEventListener("focus", sync);
+    window.addEventListener("focus",   sync);
     window.addEventListener("storage", sync);
     return () => { window.removeEventListener("focus", sync); window.removeEventListener("storage", sync); };
   }, []);
@@ -291,11 +330,10 @@ export function PatientDashboard() {
       Promise.all([
         fetch(`${API}/doctors`).then(r => r.json()).catch(() => []),
         fetch(`${API}/records/${encodeURIComponent(patientId)}`, { headers }).then(r => r.json()).catch(() => []),
-        fetch(`${API}/appointments?patientId=${encodeURIComponent(patientId)}`, { headers }).then(r => r.json()).catch(() => []),
+        fetch(`${API}/appointments`, { headers }).then(r => r.json()).catch(() => []),
       ]).then(([docs, recs, appts]) => {
         if (cancelled) return;
-        // Only real data — no mock fallback
-        setDoctors(Array.isArray(docs) ? docs : []);
+        setDoctors(Array.isArray(docs)  ? docs  : []);
         const safeRecs = Array.isArray(recs) ? recs : [];
         setReports(safeRecs);
         setAppointments(Array.isArray(appts) ? appts : []);
@@ -305,7 +343,7 @@ export function PatientDashboard() {
 
     load();
     const interval = setInterval(load, 10000);
-    const onBump = (e) => { if (e.key === "medichain-records-bump") load(); };
+    const onBump = e => { if (e.key === "medichain-records-bump") load(); };
     window.addEventListener("storage", onBump);
     return () => { cancelled = true; clearInterval(interval); window.removeEventListener("storage", onBump); };
   }, [patientId]);
@@ -314,7 +352,7 @@ export function PatientDashboard() {
     setVerifyStatus(s => ({ ...s, [idx]: "checking" }));
     try {
       const chainId = getChainPatientId();
-      if (!chainId) throw new Error("No chain patient ID found");
+      if (!chainId) throw new Error("No chain patient ID — contact support");
       const ok = await verifyRecord(chainId, report);
       setVerifyStatus(s => ({ ...s, [idx]: ok ? "verified" : "failed" }));
       toast[ok ? "success" : "error"](ok ? "✅ Verified on blockchain!" : "⚠️ Hash mismatch detected!");
@@ -328,9 +366,15 @@ export function PatientDashboard() {
     setBookedTokens(prev => [{ token, doctor: selectedDoctor, time: selectedTime, date: selectedDate, isEmergency }, ...prev]);
     setSelectedDoctor(null); setSelectedTime(""); setIsEmergency(false);
     toast.success(`✅ Appointment booked! Token: ${token}`);
+    // Refresh appointments list
+    const headers = authHeaders();
+    fetch(`${API}/appointments`, { headers })
+      .then(r => r.json())
+      .then(appts => { if (Array.isArray(appts)) setAppointments(appts); })
+      .catch(() => {});
   };
 
-  const specialties = ["All", ...new Set((doctors || []).map(d => d.specialty).filter(Boolean))];
+  const specialties    = ["All", ...new Set((doctors || []).map(d => d.specialty).filter(Boolean))];
   const filteredDoctors = filterSpec === "All" ? doctors : doctors.filter(d => d.specialty === filterSpec);
 
   return (
@@ -357,10 +401,10 @@ export function PatientDashboard() {
         {/* Stats */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 28 }}>
           {[
-            { label: "Upcoming Appointments", value: appointments.length + bookedTokens.length, icon: "📅", color: COLORS.accent },
-            { label: "Health Reports",         value: reports.length,      icon: "📋", color: COLORS.green },
-            { label: "Booked Tokens",          value: bookedTokens.length, icon: "🎟️", color: COLORS.accent2 },
-            { label: "Doctors Available",      value: doctors.length,      icon: "👨‍⚕️", color: COLORS.yellow },
+            { label: "Appointments",    value: appointments.length + bookedTokens.length, icon: "📅", color: COLORS.accent },
+            { label: "Health Reports",  value: reports.length,                            icon: "📋", color: COLORS.green },
+            { label: "Booked Tokens",   value: bookedTokens.length,                       icon: "🎟️", color: COLORS.accent2 },
+            { label: "Doctors Online",  value: doctors.filter(d => d.status !== "offline").length, icon: "👨‍⚕️", color: COLORS.yellow },
           ].map(s => (
             <div key={s.label} style={cardStyle}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -371,14 +415,24 @@ export function PatientDashboard() {
           ))}
         </div>
 
-        {/* Booked tokens */}
+        {/* My appointments from DB */}
+        {appointments.length > 0 && (
+          <div style={{ ...cardStyle, marginBottom: 28 }}>
+            <h3 style={{ color: COLORS.text, fontWeight: 700, fontSize: 16, marginBottom: 16 }}>📅 My Appointments</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px,1fr))", gap: 12 }}>
+              {appointments.map(appt => <AppointmentCard key={appt.id} appt={appt} />)}
+            </div>
+          </div>
+        )}
+
+        {/* Booked tokens (session-only, not yet in DB) */}
         {bookedTokens.length > 0 && (
           <div style={{ ...cardStyle, marginBottom: 28 }}>
-            <h3 style={{ color: COLORS.text, fontWeight: 700, fontSize: 16, marginBottom: 16 }}>🎟️ My Appointment Tokens</h3>
+            <h3 style={{ color: COLORS.text, fontWeight: 700, fontSize: 16, marginBottom: 16 }}>🎟️ New Booking Tokens</h3>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px,1fr))", gap: 12 }}>
               {bookedTokens.map((entry, i) => (
                 <div key={i} style={{ background: COLORS.bg, border: `1px solid ${COLORS.accent}30`, borderRadius: 12, padding: 16 }}>
-                  <div style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 800, color: COLORS.accent, marginBottom: 8, letterSpacing: 2 }}>{entry.token}</div>
+                  <div style={{ fontFamily: "monospace", fontSize: 16, fontWeight: 800, color: COLORS.accent, marginBottom: 8, letterSpacing: 2, wordBreak: "break-all" }}>{entry.token}</div>
                   <p style={{ color: COLORS.text, fontSize: 13, fontWeight: 600 }}>{entry.doctor?.name}</p>
                   <p style={{ color: COLORS.muted, fontSize: 12 }}>{entry.time} · {entry.date}</p>
                   {entry.isEmergency && <span style={{ color: COLORS.red, fontSize: 11, fontWeight: 700 }}>🚨 Emergency</span>}
@@ -407,73 +461,72 @@ export function PatientDashboard() {
               </div>
             )}
 
-            {loading
-              ? <p style={{ color: COLORS.muted, textAlign: "center", padding: 24 }}>Loading doctors...</p>
-              : filteredDoctors.length === 0
-                ? <EmptyState icon="👨‍⚕️" title="No doctors registered yet" message="Doctors appear here after they sign up and register on MediChain." />
-                : (
-                  <div style={{ display: "grid", gap: 12, marginBottom: 20 }}>
-                    {filteredDoctors.map(doc => {
-                      const docId      = doc.id || doc._id || String(doc.name);
-                      const isSelected = selectedDoctor && (selectedDoctor.id === docId || selectedDoctor._id === docId);
-                      const avail      = Array.isArray(doc.availability) ? doc.availability : [];
-                      return (
-                        <div key={docId} style={{ borderRadius: 14, border: `1px solid ${isSelected ? COLORS.accent : COLORS.cardBorder}`, background: isSelected ? `${COLORS.accent}06` : COLORS.bg, overflow: "hidden" }}>
-                          <div onClick={() => { setSelectedDoctor({ ...doc, id: docId }); setSelectedTime(""); }} style={{ padding: 14, cursor: "pointer", display: "flex", gap: 14, alignItems: "flex-start" }}>
-                            <Avatar name={doc.name} size={52} />
-                            <div style={{ flex: 1 }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                                <div>
-                                  <p style={{ color: COLORS.text, fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{doc.name}</p>
-                                  <p style={{ color: COLORS.accent, fontSize: 12, marginBottom: 3 }}>{doc.specialty} {doc.hospital && `· ${doc.hospital}`}</p>
-                                  {doc.experience > 0 && <p style={{ color: COLORS.muted, fontSize: 12 }}>{doc.experience} yrs experience</p>}
-                                </div>
-                                {doc.fee > 0 && (
-                                  <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 12 }}>
-                                    <p style={{ color: COLORS.green, fontWeight: 800, fontSize: 15 }}>₹{doc.fee}</p>
-                                  </div>
-                                )}
-                              </div>
+            {loading ? (
+              <p style={{ color: COLORS.muted, textAlign: "center", padding: 24 }}>Loading doctors…</p>
+            ) : filteredDoctors.length === 0 ? (
+              <EmptyState icon="👨‍⚕️" title="No doctors registered yet" message="Doctors appear here after they sign up and register on MediChain." />
+            ) : (
+              <div style={{ display: "grid", gap: 12, marginBottom: 20 }}>
+                {filteredDoctors.map(doc => {
+                  const docId      = doc.id || doc._id || String(doc.name);
+                  const isSelected = selectedDoctor && (selectedDoctor.id === docId || selectedDoctor._id === docId);
+                  const avail      = Array.isArray(doc.availability) ? doc.availability : [];
+                  return (
+                    <div key={docId} style={{ borderRadius: 14, border: `1px solid ${isSelected ? COLORS.accent : COLORS.cardBorder}`, background: isSelected ? `${COLORS.accent}06` : COLORS.bg, overflow: "hidden" }}>
+                      <div onClick={() => { setSelectedDoctor({ ...doc, id: docId }); setSelectedTime(""); }} style={{ padding: 14, cursor: "pointer", display: "flex", gap: 14, alignItems: "flex-start" }}>
+                        <Avatar name={doc.name} size={52} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                            <div>
+                              <p style={{ color: COLORS.text, fontWeight: 700, fontSize: 15, marginBottom: 2 }}>{doc.name}</p>
+                              <p style={{ color: COLORS.accent, fontSize: 12, marginBottom: 3 }}>{doc.specialty}{doc.hospital ? ` · ${doc.hospital}` : ""}</p>
+                              {doc.experience > 0 && <p style={{ color: COLORS.muted, fontSize: 12 }}>{doc.experience} yrs experience</p>}
                             </div>
-                            {isSelected && <span style={{ color: COLORS.accent, fontSize: 20, flexShrink: 0 }}>✓</span>}
-                          </div>
-
-                          <div style={{ padding: "0 14px 12px", display: "flex", gap: 8 }}>
-                            <button onClick={e => { e.stopPropagation(); setModalDoctor({ ...doc, id: docId }); }} style={{ padding: "5px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", border: `1px solid ${COLORS.cardBorder}`, background: "transparent", color: COLORS.muted }}>👤 View Profile</button>
-                            {avail.length > 0 && <span style={{ padding: "5px 10px", borderRadius: 8, fontSize: 11, background: `${COLORS.green}15`, color: COLORS.green }}>🟢 {avail.length} slots</span>}
-                          </div>
-
-                          {isSelected && (
-                            <div style={{ borderTop: `1px solid ${COLORS.cardBorder}`, padding: 14, background: `${COLORS.accent}04` }}>
-                              <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 10, fontWeight: 600 }}>🕐 Available Time Slots</p>
-                              {avail.length > 0
-                                ? (
-                                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
-                                    {avail.map(t => (
-                                      <button key={t} onClick={() => setSelectedTime(t)} style={{ padding: "8px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer", border: `1px solid ${selectedTime === t ? COLORS.accent : COLORS.cardBorder}`, background: selectedTime === t ? `${COLORS.accent}20` : COLORS.bg, color: selectedTime === t ? COLORS.accent : COLORS.text, fontWeight: selectedTime === t ? 700 : 400 }}>{t}</button>
-                                    ))}
-                                  </div>
-                                )
-                                : <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 14 }}>No time slots set by this doctor yet.</p>
-                              }
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "10px 14px", background: COLORS.bg, borderRadius: 10, border: `1px solid ${COLORS.cardBorder}` }}>
-                                <span style={{ color: COLORS.text, fontSize: 13 }}>🚨 Emergency Priority</span>
-                                <div onClick={() => setIsEmergency(!isEmergency)} style={{ width: 44, height: 24, borderRadius: 12, position: "relative", cursor: "pointer", background: isEmergency ? COLORS.red : COLORS.cardBorder }}>
-                                  <div style={{ width: 18, height: 18, borderRadius: "50%", background: "#fff", position: "absolute", top: 3, left: isEmergency ? 23 : 3, transition: "left 0.2s" }} />
-                                </div>
+                            {doc.fee > 0 && (
+                              <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 12 }}>
+                                <p style={{ color: COLORS.green, fontWeight: 800, fontSize: 15 }}>₹{doc.fee}</p>
                               </div>
-                              {selectedTime
-                                ? <button onClick={() => setShowPayment(true)} style={{ width: "100%", padding: "12px", background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`, border: "none", color: "#fff", fontSize: 15, fontWeight: 700, borderRadius: 10, cursor: "pointer" }}>💳 Proceed to Pay ₹{isEmergency ? Math.round((doc.fee || 0) * 1.5) : doc.fee}</button>
-                                : <p style={{ color: COLORS.muted, fontSize: 13, textAlign: "center" }}>← Select a time slot to continue</p>
-                              }
-                            </div>
-                          )}
+                            )}
+                          </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                )
-            }
+                        {isSelected && <span style={{ color: COLORS.accent, fontSize: 20, flexShrink: 0 }}>✓</span>}
+                      </div>
+
+                      <div style={{ padding: "0 14px 12px", display: "flex", gap: 8 }}>
+                        <button onClick={e => { e.stopPropagation(); setModalDoctor({ ...doc, id: docId }); }} style={{ padding: "5px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", border: `1px solid ${COLORS.cardBorder}`, background: "transparent", color: COLORS.muted }}>👤 View Profile</button>
+                        {avail.length > 0 && <span style={{ padding: "5px 10px", borderRadius: 8, fontSize: 11, background: `${COLORS.green}15`, color: COLORS.green }}>🟢 {avail.length} slots</span>}
+                        {doc.licenseVerified && <span style={{ padding: "5px 10px", borderRadius: 8, fontSize: 11, background: `${COLORS.green}15`, color: COLORS.green }}>✅ Verified</span>}
+                      </div>
+
+                      {isSelected && (
+                        <div style={{ borderTop: `1px solid ${COLORS.cardBorder}`, padding: 14, background: `${COLORS.accent}04` }}>
+                          <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 10, fontWeight: 600 }}>🕐 Available Time Slots</p>
+                          {avail.length > 0 ? (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+                              {avail.map(t => (
+                                <button key={t} onClick={() => setSelectedTime(t)} style={{ padding: "8px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer", border: `1px solid ${selectedTime === t ? COLORS.accent : COLORS.cardBorder}`, background: selectedTime === t ? `${COLORS.accent}20` : COLORS.bg, color: selectedTime === t ? COLORS.accent : COLORS.text, fontWeight: selectedTime === t ? 700 : 400 }}>{t}</button>
+                              ))}
+                            </div>
+                          ) : (
+                            <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 14 }}>No time slots set by this doctor yet.</p>
+                          )}
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, padding: "10px 14px", background: COLORS.bg, borderRadius: 10, border: `1px solid ${COLORS.cardBorder}` }}>
+                            <span style={{ color: COLORS.text, fontSize: 13 }}>🚨 Emergency Priority</span>
+                            <div onClick={() => setIsEmergency(!isEmergency)} style={{ width: 44, height: 24, borderRadius: 12, position: "relative", cursor: "pointer", background: isEmergency ? COLORS.red : COLORS.cardBorder }}>
+                              <div style={{ width: 18, height: 18, borderRadius: "50%", background: "#fff", position: "absolute", top: 3, left: isEmergency ? 23 : 3, transition: "left 0.2s" }} />
+                            </div>
+                          </div>
+                          {selectedTime
+                            ? <button onClick={() => setShowPayment(true)} style={{ width: "100%", padding: "12px", background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`, border: "none", color: "#fff", fontSize: 15, fontWeight: 700, borderRadius: 10, cursor: "pointer" }}>💳 Proceed to Pay ₹{isEmergency ? Math.round((doc.fee || 0) * 1.5) : doc.fee}</button>
+                            : <p style={{ color: COLORS.muted, fontSize: 13, textAlign: "center" }}>← Select a time slot to continue</p>
+                          }
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Right column */}
@@ -515,16 +568,16 @@ export function PatientDashboard() {
 
           {activeTab === "reports" && (
             reports.length === 0
-              ? <EmptyState icon="📂" title="No reports yet" message="Upload your medical documents using the Upload Report button above. They will appear here." />
+              ? <EmptyState icon="📂" title="No reports yet" message="Upload your medical documents using the Upload Report button above." />
               : (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
                   {reports.map((report, idx) => {
                     const hasFile = !!(report.ipfsUrl || report.id);
                     return (
-                      <div key={report.id || idx} style={{ padding: 16, borderRadius: 12, border: `1px solid ${COLORS.cardBorder}`, background: COLORS.bg, cursor: "pointer", transition: "border-color 0.15s" }}
+                      <div key={report.id || idx} style={{ padding: 16, borderRadius: 12, border: `1px solid ${COLORS.cardBorder}`, background: COLORS.bg, cursor: "pointer" }}
+                        onClick={() => { setSelectedReport(report); setActiveTab("summary"); }}
                         onMouseEnter={e => e.currentTarget.style.borderColor = COLORS.accent}
                         onMouseLeave={e => e.currentTarget.style.borderColor = COLORS.cardBorder}
-                        onClick={() => { setSelectedReport(report); setActiveTab("summary"); }}
                       >
                         <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
                           <div style={{ width: 44, height: 44, borderRadius: 10, flexShrink: 0, background: `${COLORS.accent}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📄</div>
@@ -532,15 +585,15 @@ export function PatientDashboard() {
                             <p style={{ color: COLORS.text, fontWeight: 600, fontSize: 13, marginBottom: 6 }}>{report.fileName || "Report"}</p>
                             <span style={{ background: `${COLORS.accent2}20`, color: "#a78bfa", border: `1px solid ${COLORS.accent2}30`, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{report.category || "General"}</span>
                             <p style={{ color: COLORS.muted, fontSize: 11, marginTop: 6 }}>{report.uploadDate || "—"}</p>
-                            {(report.hash || report.blockchainHash) && (
-                              <p style={{ color: COLORS.muted, fontSize: 10, fontFamily: "monospace", marginTop: 2 }}>⛓️ {String(report.hash || report.blockchainHash).slice(0, 20)}...</p>
+                            {(report.blockchainHash || report.hash) && (
+                              <p style={{ color: COLORS.muted, fontSize: 10, fontFamily: "monospace", marginTop: 2 }}>⛓️ {String(report.blockchainHash || report.hash).slice(0, 20)}…</p>
                             )}
                             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }} onClick={e => e.stopPropagation()}>
                               {hasFile && (
                                 <button onClick={() => setViewerRecord({ id: report.id, fileName: report.fileName, ipfsUrl: report.ipfsUrl })} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, cursor: "pointer", border: `1px solid ${COLORS.accent}40`, background: `${COLORS.accent}15`, color: COLORS.accent, fontWeight: 600 }}>📄 View</button>
                               )}
                               <button onClick={() => handleVerifyReport(report, idx)} disabled={verifyStatus[idx] === "checking"} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, cursor: "pointer", border: "none", background: verifyStatus[idx] === "verified" ? `${COLORS.green}22` : verifyStatus[idx] === "failed" ? `${COLORS.red}22` : `${COLORS.accent}22`, color: verifyStatus[idx] === "verified" ? COLORS.green : verifyStatus[idx] === "failed" ? COLORS.red : COLORS.accent }}>
-                                {verifyStatus[idx] === "checking" ? "Checking..." : verifyStatus[idx] === "verified" ? "✅ Verified" : verifyStatus[idx] === "failed" ? "⚠️ Mismatch" : "🔍 Verify"}
+                                {verifyStatus[idx] === "checking" ? "Checking…" : verifyStatus[idx] === "verified" ? "✅ Verified" : verifyStatus[idx] === "failed" ? "⚠️ Mismatch" : "🔍 Verify"}
                               </button>
                             </div>
                           </div>
