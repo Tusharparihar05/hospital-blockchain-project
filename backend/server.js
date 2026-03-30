@@ -49,9 +49,6 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 userSchema.index({ role: 1, isActive: 1 });
-// FIX: sparse but NOT unique here — the separate User model file sets unique,
-// having it in both places caused duplicate-key errors on non-patient accounts
-// whose patientId is undefined (two undefineds = duplicate key violation).
 userSchema.index({ patientId: 1 }, { sparse: true });
 
 userSchema.pre("save", async function () {
@@ -199,14 +196,12 @@ function startServer() {
     }
   });
 
-  // FIX: validate role in login so a patient cannot log in on the doctor form
   app.post("/api/auth/login", async (req, res) => {
     try {
       const { email, password, role } = req.body;
       if (!email || !password) return res.status(400).json({ error: "email and password are required" });
 
       const query = { email: email.toLowerCase().trim(), isActive: true };
-      // Only filter by role if the client sends one — keeps the endpoint flexible
       if (role && ["patient", "doctor", "admin"].includes(role)) query.role = role;
 
       const user = await User.findOne(query);
@@ -342,6 +337,60 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // ── ✅ NEW: PATCH /api/doctors/:id — update doctor profile ─────────────────
+  app.patch("/api/doctors/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // Validate ObjectId
+      if (!mongoose.isValidObjectId(id)) {
+        return res.status(400).json({ error: "Invalid doctor ID" });
+      }
+
+      // Only allow safe profile fields to be updated
+      const allowedFields = [
+        "bio", "hospital", "education", "experience",
+        "fee", "specialty", "phone",
+        "availability", "languages", "tags",
+      ];
+
+      const update = {};
+      for (const key of allowedFields) {
+        if (req.body[key] !== undefined) {
+          update[key] = req.body[key];
+        }
+      }
+
+      if (Object.keys(update).length === 0) {
+        return res.status(400).json({ error: "No valid fields provided to update" });
+      }
+
+      // Coerce numeric fields
+      if (update.experience !== undefined) update.experience = Number(update.experience);
+      if (update.fee !== undefined)        update.fee        = Number(update.fee);
+
+      const doctor = await User.findOneAndUpdate(
+        { _id: id, role: "doctor" },
+        { $set: update },
+        { new: true, runValidators: true }
+      ).select("-passwordHash -__v").lean();
+
+      if (!doctor) {
+        return res.status(404).json({ error: "Doctor not found" });
+      }
+
+      console.log(`✅ Doctor profile updated: ${doctor.name} (${id})`);
+
+      return res.json({
+        message: "Profile updated successfully",
+        doctor: { ...doctor, id: String(doctor._id) },
+      });
+    } catch (err) {
+      console.error("doctor update error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ══════════════════════════════════════════════════════════════════════════
   // APPOINTMENTS
   // ══════════════════════════════════════════════════════════════════════════
@@ -411,11 +460,9 @@ function startServer() {
   // ══════════════════════════════════════════════════════════════════════════
   // HEALTH RECORDS
   // FIX: /api/records/file/:recordId MUST be registered BEFORE
-  //      /api/records/:patientId — otherwise Express matches "file" as a
-  //      patientId and the file-download route is never reached.
+  //      /api/records/:patientId
   // ══════════════════════════════════════════════════════════════════════════
 
-  // GET /api/records  — all records (doctor view)
   app.get("/api/records", async (req, res) => {
     try {
       const records = await Record.find().sort({ createdAt: -1 }).lean();
@@ -423,7 +470,6 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // GET /api/records/file/:recordId  — MUST come before /api/records/:patientId
   app.get("/api/records/file/:recordId", async (req, res) => {
     try {
       const record = await Record.findById(req.params.recordId).lean();
@@ -443,7 +489,6 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // GET /api/records/:patientId  — comes AFTER the /file route
   app.get("/api/records/:patientId", async (req, res) => {
     try {
       const records = await Record.find({ patientId: req.params.patientId }).sort({ createdAt: -1 }).lean();
@@ -451,7 +496,6 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // POST /api/records  — JSON or multipart
   app.post("/api/records", upload.single("file"), async (req, res) => {
     try {
       const body = req.body;
@@ -602,15 +646,17 @@ function startServer() {
   app.listen(PORT, () => {
     console.log(`\nMediChain backend running on http://localhost:${PORT}\n`);
     console.log("Routes:");
-    console.log("  POST /api/auth/signup | login | wallet-login");
-    console.log("  GET  /api/patients                   (real DB)");
-    console.log("  GET  /api/doctors                    (real DB)");
-    console.log("  GET  /api/appointments   POST /api/appointments");
-    console.log("  GET  /api/records/file/:id           (before /:patientId)");
-    console.log("  GET  /api/records/:patientId");
-    console.log("  POST /api/records");
-    console.log("  GET  /api/dashboard");
-    console.log("  POST /api/emergency");
-    console.log("  POST /api/verification/doctor-license");
+    console.log("  POST  /api/auth/signup | login | wallet-login");
+    console.log("  GET   /api/patients");
+    console.log("  GET   /api/doctors          POST /api/doctors");
+    console.log("  GET   /api/doctors/:id");
+    console.log("  PATCH /api/doctors/:id      ✅ UPDATE PROFILE");
+    console.log("  GET   /api/appointments     POST /api/appointments");
+    console.log("  GET   /api/records/file/:id (before /:patientId)");
+    console.log("  GET   /api/records/:patientId");
+    console.log("  POST  /api/records");
+    console.log("  GET   /api/dashboard");
+    console.log("  POST  /api/emergency");
+    console.log("  POST  /api/verification/doctor-license");
   });
 }
