@@ -14,28 +14,28 @@ router.get("/", async (req, res) => {
     }
     const doctors = await User.find(query).select("-passwordHash -email -phone").lean();
     const shaped = doctors.map(d => ({
-      id:             String(d._id),
-      _id:            String(d._id),
-      name:           d.name             || "",
-      specialty:      d.specialty        || "",
-      hospital:       d.hospital         || "Not specified",
-      experience:     d.experience       || 0,
-      rating:         d.rating           || 4.0,
-      reviewCount:    d.reviewCount      || 0,
-      fee:            d.fee              || 500,
-      bio:            d.bio              || "",
-      education:      d.education        || "",
-      languages:      d.languages        || [],
-      tags:           d.tags             || [],
-      availability:   d.availability     || [],
-      status:         d.status           || "online",
-      walletAddress:  d.walletAddress    || "",
-      licenseVerified:d.licenseVerified  || false,
-      licenseNumber:  d.licenseNumber    || "",
-      conditions:     d.tags             || [],
-      patients:       d.reviewCount * 3  || 0,
-      todayAppts:     d.availability?.length || 0,
-      reviews:        [],
+      id:              String(d._id),
+      _id:             String(d._id),
+      name:            d.name             || "",
+      specialty:       d.specialty        || "",
+      hospital:        d.hospital         || "Not specified",
+      experience:      d.experience       || 0,
+      rating:          d.rating           || 4.0,
+      reviewCount:     d.reviewCount      || 0,
+      fee:             d.fee              || 500,
+      bio:             d.bio              || "",
+      education:       d.education        || "",
+      languages:       d.languages        || [],
+      tags:            d.tags             || [],
+      availability:    d.availability     || [],
+      status:          d.status           || "online",
+      walletAddress:   d.walletAddress    || "",
+      licenseVerified: d.licenseVerified  || false,
+      licenseNumber:   d.licenseNumber    || "",
+      conditions:      d.tags             || [],
+      patients:        d.reviewCount * 3  || 0,
+      todayAppts:      d.availability?.length || 0,
+      reviews:         [],
     }));
     res.json(shaped);
   } catch (err) {
@@ -46,17 +46,31 @@ router.get("/", async (req, res) => {
 // ── GET /api/doctors/:id ──────────────────────────────────────────────────────
 router.get("/:id", async (req, res) => {
   try {
-    const d = await User.findOne({ _id: req.params.id, role: "doctor" }).select("-passwordHash");
+    // FIX: use .lean() — no Mongoose methods needed on a plain GET
+    const d = await User.findOne({ _id: req.params.id, role: "doctor" })
+      .select("-passwordHash")
+      .lean();
     if (!d) return res.status(404).json({ error: "Doctor not found" });
     res.json({
-      id: String(d._id), _id: String(d._id),
-      name: d.name, specialty: d.specialty, hospital: d.hospital,
-      experience: d.experience, rating: d.rating, reviewCount: d.reviewCount,
-      fee: d.fee, bio: d.bio, education: d.education,
-      languages: d.languages, tags: d.tags, availability: d.availability,
-      status: d.status, walletAddress: d.walletAddress,
-      licenseVerified: d.licenseVerified, licenseNumber: d.licenseNumber,
-      conditions: d.tags || [],
+      id:              String(d._id),
+      _id:             String(d._id),
+      name:            d.name,
+      specialty:       d.specialty,
+      hospital:        d.hospital,
+      experience:      d.experience,
+      rating:          d.rating,
+      reviewCount:     d.reviewCount,
+      fee:             d.fee,
+      bio:             d.bio,
+      education:       d.education,
+      languages:       d.languages,
+      tags:            d.tags,
+      availability:    d.availability,
+      status:          d.status,
+      walletAddress:   d.walletAddress,
+      licenseVerified: d.licenseVerified,
+      licenseNumber:   d.licenseNumber,
+      conditions:      d.tags || [],
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -78,9 +92,23 @@ router.patch("/:id", protect, allow("doctor", "admin"), async (req, res) => {
     for (const k of allowed) {
       if (req.body[k] !== undefined) updates[k] = req.body[k];
     }
-    const updated = await User.findByIdAndUpdate(req.params.id, updates, { new: true }).select("-passwordHash");
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No valid fields to update" });
+    }
+
+    // FIX: use .lean() — plain object, no Mongoose instance methods needed
+    // The old code called .toSafeObject() on a .lean() result which is just
+    // a plain JS object and has no prototype methods → TypeError → 500
+    const updated = await User.findByIdAndUpdate(
+      req.params.id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    ).select("-passwordHash -__v").lean();
+
     if (!updated) return res.status(404).json({ error: "Doctor not found" });
-    res.json(updated.toSafeObject());
+
+    // FIX: spread the plain lean object directly — no .toSafeObject() call
+    res.json({ ...updated, id: String(updated._id) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

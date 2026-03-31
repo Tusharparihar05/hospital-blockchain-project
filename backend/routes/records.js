@@ -1,8 +1,7 @@
-// backend/routes/records.js
 const router        = require("express").Router();
 const multer        = require("multer");
 const { ethers }    = require("ethers");
-const MedicalRecord = require("../models/MedicalRecord");
+const MedicalRecord = require("../models/MedicalRecord"); // FIX: must match model name in server.js
 const User          = require("../models/User");
 const { protect, allow } = require("../middleware/auth");
 
@@ -18,36 +17,24 @@ const upload = multer({
 });
 
 // ── IPFS upload via Pinata ────────────────────────────────────────────────────
-// Free tier: 1 GB storage. Get JWT from https://pinata.cloud → API Keys
 async function uploadToIPFS(fileBuffer, fileName, mimeType) {
-  const jwt = process.env.PINATA_JWT;
-  if (!jwt) {
+  const jwtToken = process.env.PINATA_JWT;
+  if (!jwtToken) {
     console.warn("[IPFS] PINATA_JWT not set — skipping IPFS upload");
     return { success: false, reason: "PINATA_JWT not set in .env" };
   }
 
   try {
-    // Build multipart form manually (works with Node 18+ built-in fetch)
     const { FormData, Blob } = await import("formdata-node");
 
     const form = new FormData();
-    form.append(
-      "file",
-      new Blob([fileBuffer], { type: mimeType }),
-      fileName
-    );
-    form.append(
-      "pinataMetadata",
-      JSON.stringify({ name: fileName })
-    );
-    form.append(
-      "pinataOptions",
-      JSON.stringify({ cidVersion: 1 })
-    );
+    form.append("file", new Blob([fileBuffer], { type: mimeType }), fileName);
+    form.append("pinataMetadata", JSON.stringify({ name: fileName }));
+    form.append("pinataOptions",  JSON.stringify({ cidVersion: 1 }));
 
     const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
       method:  "POST",
-      headers: { Authorization: `Bearer ${jwt}` },
+      headers: { Authorization: `Bearer ${jwtToken}` },
       body:    form,
     });
 
@@ -58,12 +45,7 @@ async function uploadToIPFS(fileBuffer, fileName, mimeType) {
 
     const data = await res.json();
     const cid  = data.IpfsHash;
-
-    return {
-      success: true,
-      cid,
-      url: `https://gateway.pinata.cloud/ipfs/${cid}`,
-    };
+    return { success: true, cid, url: `https://gateway.pinata.cloud/ipfs/${cid}` };
   } catch (err) {
     console.error("[IPFS upload failed]", err.message);
     return { success: false, reason: err.message };
@@ -109,17 +91,17 @@ async function anchorOnChain(chainPatientId, fileHash, category, fileName) {
 // ── AI summary ────────────────────────────────────────────────────────────────
 function generateAISummary(category, fileName) {
   const summaries = {
-    "Blood Test":   {
+    "Blood Test": {
       plainLanguage: "Your blood test has been processed. Results show key health markers including cell counts, glucose levels, and organ function indicators.",
       keyFindings: ["Complete blood count (CBC) processed","Metabolic panel indicators captured","Lipid profile recorded for review"],
       recommendedSteps: ["Review results with your doctor within 3–5 days","Stay hydrated","Schedule follow-up if values are outside normal range"],
     },
-    "X-Ray":        {
+    "X-Ray": {
       plainLanguage: "Your X-ray image has been digitally stored and hashed for tamper-proof integrity.",
       keyFindings: ["High-resolution image captured","Digital hash generated","Accessible to treating doctor"],
       recommendedSteps: ["Wait for radiologist report (24–48 hrs)","Inform doctor about symptoms","Bring previous X-rays for comparison"],
     },
-    "MRI Scan":     {
+    "MRI Scan": {
       plainLanguage: "Your MRI scan files have been securely uploaded and hashed.",
       keyFindings: ["Multi-sequence MRI data stored","Blockchain hash created","Scan linked to patient profile"],
       recommendedSteps: ["Schedule review with specialist","Note symptoms to discuss","Avoid strenuous activity until cleared"],
@@ -129,7 +111,7 @@ function generateAISummary(category, fileName) {
       keyFindings: ["Prescription hashed and stored","Prescribing doctor recorded","Linked to your patient account"],
       recommendedSteps: ["Fill at a registered pharmacy","Follow dosage strictly","Contact doctor if side effects occur"],
     },
-    "ECG":          {
+    "ECG": {
       plainLanguage: "Your ECG has been recorded and stored securely.",
       keyFindings: ["Heart rhythm trace stored","Waveform anchored on blockchain","Available for cardiologist review"],
       recommendedSteps: ["Share with cardiologist promptly","Report chest pain or palpitations","Avoid caffeine before follow-up ECG"],
@@ -143,13 +125,16 @@ function generateAISummary(category, fileName) {
 }
 
 // ── GET /api/records/:patientId ───────────────────────────────────────────────
+// FIX: this route is registered AFTER /api/records/file/:recordId in server.js
+// so "file" is never incorrectly matched as a patientId param
 router.get("/:patientId", protect, async (req, res) => {
   try {
     const pid = req.params.patientId;
     const records = await MedicalRecord.find({
       $or: [
         { patientStrId: pid },
-        { patientId: pid.match(/^[0-9a-f]{24}$/i) ? pid : null },
+        // FIX: only try ObjectId cast when it looks like one — avoids CastError 500
+        { patientId: mongoose.isValidObjectId(pid) ? pid : null },
       ],
     }).sort({ createdAt: -1 }).lean();
 
@@ -219,23 +204,23 @@ router.post("/", protect, upload.single("file"), async (req, res) => {
 
     if (!patientId) return res.status(400).json({ error: "patientId is required" });
 
-    // Resolve patient
+    // Resolve patient — try patientId string first, then ObjectId
     const patient = await User.findOne({
       $or: [
         { patientId },
-        { _id: patientId.match(/^[0-9a-f]{24}$/i) ? patientId : null },
+        { _id: mongoose.isValidObjectId(patientId) ? patientId : null },
       ],
       role: "patient",
     });
 
     const chainPatientId = patient?.chainPatientId || 0;
 
-    // Upload to IPFS (Pinata)
+    // Upload to IPFS (Pinata) — non-blocking on failure
     let ipfsResult = { success: false, reason: "No file buffer" };
     if (req.file?.buffer) {
       ipfsResult = await uploadToIPFS(req.file.buffer, fileName, req.file.mimetype);
       if (ipfsResult.success) console.log(`✅ IPFS: ${ipfsResult.url}`);
-      else console.warn("[IPFS skipped]", ipfsResult.reason);
+      else                    console.warn("[IPFS skipped]", ipfsResult.reason);
     }
 
     const summary = generateAISummary(category, fileName);
@@ -243,11 +228,11 @@ router.post("/", protect, upload.single("file"), async (req, res) => {
     // Save to MongoDB
     const record = await MedicalRecord.create({
       patientId:    patient?._id || req.user._id,
-      patientStrId: patient?.patientId || patientId,
+      patientStrId: patient?.patientId || patientId,  // FIX: always populate for GET /:patientId lookup
       uploadedBy:   req.user._id,
       fileName,
       category:     category || "Other",
-      fileHash,
+      fileHash,                                        // FIX: correct field name (was "hash" in old server.js)
       ipfsCid:      ipfsResult.cid || "",
       ipfsUrl:      ipfsResult.url || "",
       doctor:       doctor || req.user.name || "Self Upload",
@@ -258,7 +243,7 @@ router.post("/", protect, upload.single("file"), async (req, res) => {
       anchoredOnChain: false,
     });
 
-    // Anchor on blockchain
+    // Anchor on blockchain (non-blocking on failure)
     let blockchainResult = { success: false, reason: "No chainPatientId" };
     if (chainPatientId) {
       blockchainResult = await anchorOnChain(chainPatientId, fileHash, category, fileName);
@@ -292,7 +277,32 @@ router.post("/", protect, upload.single("file"), async (req, res) => {
     });
   } catch (err) {
     if (err.code === 11000) return res.status(409).json({ error: "File already uploaded (duplicate hash)" });
-    console.error("[POST /api/records]", err.message);
+    console.error("[POST /api/records]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/records/file/:recordId — stream stored file ─────────────────────
+// FIX: must be registered in server.js BEFORE /:patientId to avoid "file"
+// being parsed as a patientId. This route is here for when records.js is
+// mounted as a sub-router; in server.js the routes are defined inline in order.
+router.get("/file/:recordId", protect, async (req, res) => {
+  try {
+    const record = await MedicalRecord.findById(req.params.recordId).lean();
+    if (!record)         return res.status(404).json({ error: "Record not found" });
+    if (!record.ipfsUrl) return res.status(404).json({ error: "No file stored for this record" });
+
+    if (record.ipfsUrl.startsWith("data:")) {
+      const [header, b64] = record.ipfsUrl.split(",");
+      const mime = header.replace("data:", "").replace(";base64", "");
+      const buf  = Buffer.from(b64, "base64");
+      res.setHeader("Content-Type", mime);
+      res.setHeader("Content-Disposition", `inline; filename="${record.fileName}"`);
+      res.setHeader("Content-Length", buf.length);
+      return res.send(buf);
+    }
+    res.redirect(record.ipfsUrl);
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -308,8 +318,10 @@ router.patch("/:id/anchor", protect, async (req, res) => {
     const result = await anchorOnChain(patient.chainPatientId, record.fileHash, record.category, record.fileName);
     if (result.success) {
       await MedicalRecord.findByIdAndUpdate(record._id, {
-        blockchainHash: record.fileHash, blockchainTx: result.txHash,
-        anchoredOnChain: true, anchoredAt: new Date(),
+        blockchainHash:  record.fileHash,
+        blockchainTx:    result.txHash,
+        anchoredOnChain: true,
+        anchoredAt:      new Date(),
       });
     }
     res.json({ success: result.success, ...result });
