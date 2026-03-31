@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { anchorRecordOnChain, isRecordAnchored } from "../hooks/useBlockchain";
 
 const API = process.env.REACT_APP_API_URL || "http://localhost:5000/api";
 
@@ -8,12 +9,6 @@ const API = process.env.REACT_APP_API_URL || "http://localhost:5000/api";
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Returns ONLY the Authorization header — NO Content-Type.
- * When uploading FormData the browser MUST set Content-Type itself so it can
- * include the multipart boundary string. If we set Content-Type manually
- * the boundary is missing and multer rejects the request.
- */
 function authHeader() {
   const token = localStorage.getItem("token");
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -25,10 +20,11 @@ function getStoredUser() {
 function getStoredPatientId() {
   return getStoredUser().patientId || null;
 }
+function getChainPatientId() {
+  const u = getStoredUser();
+  return u.chainPatientId != null ? Number(u.chainPatientId) : null;
+}
 
-/**
- * Pure browser SHA-256 hash — uses SubtleCrypto API.
- */
 async function hashFileSHA256(file) {
   const buf    = await file.arrayBuffer();
   const digest = await crypto.subtle.digest("SHA-256", buf);
@@ -42,7 +38,7 @@ function notifyRecordsChanged() {
   try { localStorage.setItem("medichain-records-bump", String(Date.now())); } catch (_) {}
 }
 
-const MAX_SIZE = 20 * 1024 * 1024; // 20 MB
+const MAX_SIZE = 20 * 1024 * 1024;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DESIGN TOKENS
@@ -146,6 +142,28 @@ function FileViewer({ url, fileName, onClose }) {
   );
 }
 
+// ── Blockchain status badge ────────────────────────────────────────────────────
+function BlockchainBadge({ status }) {
+  const configs = {
+    idle:       { color: C.muted,   bg: `${C.muted}15`,   border: `${C.muted}30`,   icon: "⛓️",  text: "Not anchored yet" },
+    checking:   { color: C.yellow,  bg: `${C.yellow}15`,  border: `${C.yellow}30`,  icon: "🔍",  text: "Checking chain..." },
+    requesting: { color: C.yellow,  bg: `${C.yellow}15`,  border: `${C.yellow}30`,  icon: "🦊",  text: "Waiting for MetaMask..." },
+    pending:    { color: C.accent,  bg: `${C.accent}15`,  border: `${C.accent}30`,  icon: "⏳",  text: "Transaction pending..." },
+    anchored:   { color: C.green,   bg: `${C.green}15`,   border: `${C.green}30`,   icon: "✅",  text: "Anchored on blockchain!" },
+    skipped:    { color: C.yellow,  bg: `${C.yellow}15`,  border: `${C.yellow}30`,  icon: "⚠️",  text: "Already anchored" },
+    error:      { color: C.red,     bg: `${C.red}15`,     border: `${C.red}30`,     icon: "❌",  text: "Blockchain anchor failed" },
+    no_wallet:  { color: C.muted,   bg: `${C.muted}15`,   border: `${C.muted}30`,   icon: "🦊",  text: "MetaMask not connected" },
+    no_address: { color: C.muted,   bg: `${C.muted}15`,   border: `${C.muted}30`,   icon: "⚙️",  text: "Contract address not set in .env" },
+    saved:      { color: C.green,   bg: `${C.green}15`,   border: `${C.green}30`,   icon: "✅",  text: "Saved to MediChain" },
+  };
+  const cfg = configs[status] || configs.idle;
+  return (
+    <div style={{ padding:"12px 16px", borderRadius:10, marginBottom:16, background:cfg.bg, border:`1px solid ${cfg.border}` }}>
+      <p style={{ color:cfg.color, fontSize:13, fontWeight:600 }}>{cfg.icon} {cfg.text}</p>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,15 +175,16 @@ export function PatientUploadPage() {
   const [category,    setCategory]    = useState("");
   const [busy,        setBusy]        = useState(false);
   const [progress,    setProgress]    = useState(0);
+  const [progressMsg, setProgressMsg] = useState("Uploading file to server…");
   const [done,        setDone]        = useState(false);
   const [savedRecord, setSavedRecord] = useState(null);
   const [aiSummary,   setAiSummary]   = useState(null);
   const [fileHash,    setFileHash]    = useState("");
+  const [txHash,      setTxHash]      = useState("");
   const [viewerUrl,   setViewerUrl]   = useState("");
   const [viewerOpen,  setViewerOpen]  = useState(false);
-  const [bcStatus,    setBcStatus]    = useState("saved");
+  const [bcStatus,    setBcStatus]    = useState("idle");
 
-  // ── FIX: guard ref prevents double-submission (StrictMode / rapid clicks) ──
   const uploadingRef = useRef(false);
   const fileInputRef = useRef(null);
   const patientId    = getStoredPatientId();
@@ -190,12 +209,9 @@ export function PatientUploadPage() {
   const handleDragOver = (e) => e.preventDefault();
   const removeFile     = (i) => setFiles(p => p.filter((_,idx) => idx!==i));
 
-  // ── UPLOAD ────────────────────────────────────────────────────────────────
-  // FIX: wrapped in useCallback + uploadingRef guard to prevent duplicate POSTs
+  // ── UPLOAD + BLOCKCHAIN ANCHOR ────────────────────────────────────────────
   const handleUpload = useCallback(async () => {
-    // ── Guard: bail out if already uploading ──────────────────────────────
     if (uploadingRef.current) return;
-
     if (!patientId)   { toast.error("Not logged in"); navigate("/"); return; }
     if (!files.length){ toast.error("Please select a file");           return; }
     if (!category)    { toast.error("Please select a category");        return; }
@@ -203,25 +219,26 @@ export function PatientUploadPage() {
     uploadingRef.current = true;
     setBusy(true);
     setProgress(0);
+    setBcStatus("idle");
+    setTxHash("");
 
-    // Smooth progress ticker
     let pct = 0;
     const ticker = setInterval(() => {
-      pct = Math.min(pct + 4, 85);
+      pct = Math.min(pct + 4, 75); // only go to 75% — blockchain step takes it to 100
       setProgress(pct);
     }, 250);
 
     try {
-      // ── 1. Hash in browser
+      // ── STEP 1: Hash file in browser ──────────────────────────────────────
+      setProgressMsg("Hashing file…");
       let fHash = "";
       try {
         fHash = await hashFileSHA256(files[0]);
         setFileHash(fHash);
-      } catch (_) {
-        // Non-fatal — upload still works without a hash
-      }
+      } catch (_) {}
 
-      // ── 2. Build FormData
+      // ── STEP 2: Upload to backend (saves to MongoDB + IPFS) ───────────────
+      setProgressMsg("Uploading to server…");
       const form = new FormData();
       form.append("file",      files[0]);
       form.append("patientId", patientId);
@@ -230,57 +247,125 @@ export function PatientUploadPage() {
       form.append("dept",      category);
       if (fHash) form.append("fileHash", fHash);
 
-      // ── 3. Fetch — ONLY Authorization header, never Content-Type
       const res = await fetch(`${API}/records`, {
         method:  "POST",
         headers: authHeader(),
         body:    form,
       });
 
-      // ── 4. Parse response
       let data = {};
       try { data = await res.json(); } catch (_) {}
 
       if (!res.ok) {
-        // FIX: surface the actual server error message when available
-        const serverMsg = data?.error || data?.message || data?.details || "";
+        const serverMsg = data?.error || data?.message || "";
         throw new Error(serverMsg || `Server error ${res.status}`);
       }
 
-      // ── 5. Store results
       const rec     = data.record || data;
       const summary = data.aiSummary || rec?.aiSummary;
       setSavedRecord(rec);
       if (summary) setAiSummary(summary);
-      setBcStatus(rec?.anchoredOnChain ? "anchored" : "saved");
 
       const rid  = rec?._id || rec?.id;
       const vUrl = rid ? `${API}/records/file/${rid}` : (data.ipfsUrl || rec?.ipfsUrl || "");
       setViewerUrl(vUrl);
 
-      notifyRecordsChanged();
       clearInterval(ticker);
-      setProgress(100);
+      setProgress(80);
+
+      // ── STEP 3: Anchor on blockchain via MetaMask ─────────────────────────
+      // This is the part that was missing — now it triggers MetaMask popup!
+      const chainPatientId = getChainPatientId();
+      const hashToAnchor   = rec?.fileHash || fHash;
+
+      if (!chainPatientId) {
+        // Patient has no chainPatientId — skip blockchain silently
+        setBcStatus("saved");
+        setProgress(100);
+      } else if (!process.env.REACT_APP_PATIENT_RECORDS_ADDRESS) {
+        // Contract address not set in .env
+        toast.warning("⚙️ Contract address not set — saved to database only");
+        setBcStatus("no_address");
+        setProgress(100);
+      } else if (!window.ethereum) {
+        // MetaMask not installed
+        toast.warning("🦊 MetaMask not found — saved to database only");
+        setBcStatus("no_wallet");
+        setProgress(100);
+      } else {
+        // ── Check if already anchored (avoids a wasted MetaMask popup) ───
+        setProgressMsg("Checking blockchain…");
+        setBcStatus("checking");
+        const alreadyAnchored = hashToAnchor ? await isRecordAnchored(hashToAnchor) : false;
+
+        if (alreadyAnchored) {
+          toast.success("⛓️ Already anchored on blockchain!");
+          setBcStatus("skipped");
+          setProgress(100);
+        } else {
+          // ── THIS is where MetaMask popup appears ─────────────────────────
+          setProgressMsg("Waiting for MetaMask approval…");
+          setBcStatus("requesting");
+          toast.info("🦊 MetaMask will open — please approve the transaction");
+
+          try {
+            const result = await anchorRecordOnChain(
+              chainPatientId,
+              hashToAnchor,
+              category,
+              files[0].name
+            );
+
+            setTxHash(result.txHash);
+            setBcStatus("anchored");
+            setProgress(100);
+            toast.success(`✅ Anchored on blockchain! Block #${result.blockNumber}`);
+
+            // Notify backend to update anchoredOnChain flag
+            try {
+              if (rid) {
+                await fetch(`${API}/records/${rid}/anchor`, {
+                  method:  "PATCH",
+                  headers: { ...authHeader(), "Content-Type": "application/json" },
+                });
+              }
+            } catch (_) {
+              // Non-fatal — record is still anchored on chain
+            }
+          } catch (bcErr) {
+            console.warn("[blockchain anchor]", bcErr.message);
+            if (bcErr.message?.includes("user rejected") || bcErr.code === 4001) {
+              toast.warning("Transaction rejected — file saved to database only");
+              setBcStatus("error");
+            } else if (bcErr.message?.includes("Already anchored")) {
+              toast.success("⛓️ Already anchored on blockchain!");
+              setBcStatus("skipped");
+            } else {
+              toast.warning("Blockchain anchor failed — file saved to database. " + bcErr.message);
+              setBcStatus("error");
+            }
+            setProgress(100);
+          }
+        }
+      }
+
+      notifyRecordsChanged();
       setTimeout(() => { setBusy(false); setDone(true); uploadingRef.current = false; }, 350);
 
     } catch (err) {
       clearInterval(ticker);
       setBusy(false);
       setProgress(0);
-      uploadingRef.current = false;  // FIX: always reset the guard on error
+      uploadingRef.current = false;
 
       const msg = err.message || "";
-      if (msg.includes("Failed to fetch") || msg.includes("ERR_CONNECTION_REFUSED") || msg.includes("NetworkError")) {
+      if (msg.includes("Failed to fetch") || msg.includes("ERR_CONNECTION_REFUSED")) {
         toast.error("Cannot reach the server. Make sure the backend is running on port 5000.");
-      } else if (msg.includes("401") || msg.includes("Unauthorized") || msg.includes("Not logged in") || msg.includes("jwt")) {
-        // FIX: clear the stale token so the user can log in fresh
+      } else if (msg.includes("401") || msg.includes("Unauthorized") || msg.includes("jwt")) {
         localStorage.removeItem("token");
         localStorage.removeItem("user");
         toast.error("Session expired — please log in again.");
         navigate("/");
-      } else if (msg.includes("500") || msg.includes("Internal Server Error")) {
-        // FIX: show a more helpful message for backend 500s
-        toast.error("Server error — check the backend logs for details. The file may be too large or the database connection failed.");
       } else {
         toast.error("Upload failed: " + (msg || "Unknown error"));
       }
@@ -290,7 +375,7 @@ export function PatientUploadPage() {
 
   const handleReset = () => {
     setFiles([]); setCategory(""); setDone(false); setProgress(0);
-    setBcStatus("saved"); setFileHash(""); setViewerUrl("");
+    setBcStatus("idle"); setFileHash(""); setViewerUrl(""); setTxHash("");
     setSavedRecord(null); setAiSummary(null);
     uploadingRef.current = false;
   };
@@ -315,7 +400,7 @@ export function PatientUploadPage() {
         <div style={{ marginBottom:28 }}>
           <Link to="/patient/dashboard" style={{ color:C.accent, fontSize:13, textDecoration:"none" }}>← Back to Dashboard</Link>
           <h1 style={{ color:C.text, fontSize:28, fontWeight:800, marginTop:10, marginBottom:4 }}>Upload Health Report</h1>
-          <p style={{ color:C.muted, fontSize:14 }}>Upload your medical documents — secured and stored in MediChain</p>
+          <p style={{ color:C.muted, fontSize:14 }}>Upload your medical documents — secured and anchored on blockchain</p>
           {patientId && (
             <p style={{ color:C.muted, fontSize:12, marginTop:6 }}>
               Patient ID: <span style={{ fontFamily:"monospace", color:C.accent }}>{patientId}</span>
@@ -379,7 +464,11 @@ export function PatientUploadPage() {
               <span style={{ fontSize:22, flexShrink:0 }}>⛓️</span>
               <div>
                 <h4 style={{ color:C.accent, fontWeight:700, marginBottom:6 }}>How Your File Is Secured</h4>
-                <p style={{ color:C.muted, fontSize:13, lineHeight:1.6 }}>Your file is hashed using SHA-256 directly in your browser before uploading. The hash creates an immutable proof — if the file is ever altered, the hash won't match. Both you and your doctor can view the original file.</p>
+                <p style={{ color:C.muted, fontSize:13, lineHeight:1.6 }}>
+                  Your file is hashed in your browser, uploaded to our servers, then anchored on-chain via MetaMask.
+                  The blockchain stores an immutable proof — if the file is ever altered, the hash won't match.
+                  MetaMask will ask for your approval before writing to the blockchain.
+                </p>
               </div>
             </div>
 
@@ -403,15 +492,17 @@ export function PatientUploadPage() {
               ) : (
                 <div>
                   <div style={{ display:"flex", justifyContent:"space-between", marginBottom:10 }}>
-                    <span style={{ color:C.text, fontSize:14, fontWeight:600 }}>
-                      {progress < 85 ? "Uploading file to server…" : "Finalizing…"}
-                    </span>
+                    <span style={{ color:C.text, fontSize:14, fontWeight:600 }}>{progressMsg}</span>
                     <span style={{ color:C.muted, fontSize:14 }}>{progress}%</span>
                   </div>
                   <div style={{ height:8, background:C.border, borderRadius:4, overflow:"hidden" }}>
                     <div style={{ height:"100%", borderRadius:4, width:`${progress}%`, background:`linear-gradient(90deg,${C.accent},${C.accent2})`, transition:"width 0.25s ease" }} />
                   </div>
-                  <p style={{ color:C.muted, fontSize:12, marginTop:8, textAlign:"center" }}>Please wait — do not close this tab</p>
+                  <p style={{ color:C.muted, fontSize:12, marginTop:8, textAlign:"center" }}>
+                    {bcStatus === "requesting"
+                      ? "🦊 Check MetaMask — approval required"
+                      : "Please wait — do not close this tab"}
+                  </p>
                 </div>
               )}
             </div>
@@ -426,11 +517,14 @@ export function PatientUploadPage() {
               <h3 style={{ color:C.text, fontSize:22, fontWeight:800, marginBottom:8 }}>Upload Successful!</h3>
               <p style={{ color:C.muted, marginBottom:16 }}>Your report has been saved and an AI summary was generated.</p>
 
-              <div style={{ padding:"12px 16px", borderRadius:10, marginBottom:16, background:`${C.green}11`, border:`1px solid ${C.green}33` }}>
-                <p style={{ color:C.green, fontSize:13, fontWeight:600 }}>
-                  {bcStatus === "anchored" ? "⛓️ Hash anchored on blockchain!" : "✅ Saved to MediChain database"}
-                </p>
-              </div>
+              <BlockchainBadge status={bcStatus} />
+
+              {txHash && (
+                <div style={{ marginBottom:16, padding:12, background:C.bg, borderRadius:10, border:`1px solid ${C.green}30`, textAlign:"left" }}>
+                  <p style={{ color:C.muted, fontSize:11, marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Transaction Hash</p>
+                  <p style={{ color:C.green, fontSize:11, fontFamily:"monospace", wordBreak:"break-all" }}>{txHash}</p>
+                </div>
+              )}
 
               {fileHash && (
                 <div style={{ marginBottom:16, padding:12, background:C.bg, borderRadius:10, border:`1px solid ${C.accent}30`, textAlign:"left" }}>

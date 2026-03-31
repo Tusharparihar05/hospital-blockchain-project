@@ -7,93 +7,85 @@
   {
     "anonymous": false,
     "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "tokenId",
-        "type": "uint256"
-      }
+      { "indexed": true,  "internalType": "address", "name": "owner",    "type": "address" },
+      { "indexed": true,  "internalType": "address", "name": "approved", "type": "address" },
+      { "indexed": true,  "internalType": "uint256", "name": "tokenId",  "type": "uint256" }
     ],
-    "name": "AppointmentCompleted",
+    "name": "Approval",
     "type": "event"
   },
   {
     "anonymous": false,
     "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "tokenId",
-        "type": "uint256"
-      }
+      { "indexed": true,  "internalType": "address", "name": "owner",    "type": "address" },
+      { "indexed": true,  "internalType": "address", "name": "operator", "type": "address" },
+      { "indexed": false, "internalType": "bool",    "name": "approved", "type": "bool"    }
     ],
-    "name": "TokenInvalidated",
+    "name": "ApprovalForAll",
     "type": "event"
   },
   {
     "anonymous": false,
     "inputs": [
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "tokenId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "patientId",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "doctorId",
-        "type": "uint256"
-      }
+      { "indexed": true,  "internalType": "uint256", "name": "tokenId",       "type": "uint256" },
+      { "indexed": true,  "internalType": "uint256", "name": "patientId",     "type": "uint256" },
+      { "indexed": false, "internalType": "string",  "name": "appointmentId", "type": "string"  },
+      { "indexed": false, "internalType": "address", "name": "recipient",     "type": "address" }
     ],
-    "name": "TokenIssued",
+    "name": "AppointmentMinted",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true,  "internalType": "address", "name": "from",    "type": "address" },
+      { "indexed": true,  "internalType": "address", "name": "to",      "type": "address" },
+      { "indexed": true,  "internalType": "uint256", "name": "tokenId", "type": "uint256" }
+    ],
+    "name": "Transfer",
     "type": "event"
   },
   {
     "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
+      { "internalType": "address", "name": "to",      "type": "address" },
+      { "internalType": "uint256", "name": "tokenId", "type": "uint256" }
     ],
-    "name": "appointments",
+    "name": "approve",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "address", "name": "owner", "type": "address" }
+    ],
+    "name": "balanceOf",
+    "outputs": [
+      { "internalType": "uint256", "name": "", "type": "uint256" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "uint256", "name": "tokenId", "type": "uint256" }
+    ],
+    "name": "getAppointmentData",
     "outputs": [
       {
-        "internalType": "uint256",
-        "name": "tokenId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "patientId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "doctorId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "scheduledTime",
-        "type": "uint256"
-      },
-      {
-        "internalType": "bool",
-        "name": "isValid",
-        "type": "bool"
-      },
-      {
-        "internalType": "bool",
-        "name": "isCompleted",
-        "type": "bool"
+        "components": [
+          { "internalType": "uint256", "name": "patientId",       "type": "uint256" },
+          { "internalType": "address", "name": "patientWallet",   "type": "address" },
+          { "internalType": "address", "name": "doctorWallet",    "type": "address" },
+          { "internalType": "string",  "name": "doctorName",      "type": "string"  },
+          { "internalType": "string",  "name": "specialty",       "type": "string"  },
+          { "internalType": "uint256", "name": "appointmentDate", "type": "uint256" },
+          { "internalType": "string",  "name": "appointmentId",   "type": "string"  },
+          { "internalType": "bool",    "name": "minted",          "type": "bool"    }
+        ],
+        "internalType": "struct AppointmentToken.AppointmentData",
+        "name": "",
+        "type": "tuple"
       }
     ],
     "stateMutability": "view",
@@ -101,145 +93,159 @@
   },
   {
     "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "tokenId",
-        "type": "uint256"
-      }
+      { "internalType": "uint256", "name": "tokenId", "type": "uint256" }
     ],
-    "name": "completeAppointment",
-    "outputs": [],
-    "stateMutability": "nonpayable",
+    "name": "getApproved",
+    "outputs": [
+      { "internalType": "address", "name": "", "type": "address" }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
     "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "patientId",
-        "type": "uint256"
-      }
+      { "internalType": "uint256", "name": "patientId", "type": "uint256" }
     ],
     "name": "getPatientTokens",
     "outputs": [
-      {
-        "internalType": "uint256[]",
-        "name": "",
-        "type": "uint256[]"
-      }
+      { "internalType": "uint256[]", "name": "", "type": "uint256[]" }
     ],
     "stateMutability": "view",
     "type": "function"
   },
   {
     "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "tokenId",
-        "type": "uint256"
-      }
+      { "internalType": "string", "name": "appointmentId", "type": "string" }
     ],
-    "name": "invalidateToken",
+    "name": "getTokenByAppointmentId",
+    "outputs": [
+      { "internalType": "bool",    "name": "minted",  "type": "bool"    },
+      { "internalType": "uint256", "name": "tokenId", "type": "uint256" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "address", "name": "owner",    "type": "address" },
+      { "internalType": "address", "name": "operator", "type": "address" }
+    ],
+    "name": "isApprovedForAll",
+    "outputs": [
+      { "internalType": "bool", "name": "", "type": "bool" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "address", "name": "to",              "type": "address" },
+      { "internalType": "uint256", "name": "patientId",       "type": "uint256" },
+      { "internalType": "address", "name": "patientWallet",   "type": "address" },
+      { "internalType": "address", "name": "doctorWallet",    "type": "address" },
+      { "internalType": "string",  "name": "doctorName",      "type": "string"  },
+      { "internalType": "string",  "name": "specialty",       "type": "string"  },
+      { "internalType": "uint256", "name": "appointmentDate", "type": "uint256" },
+      { "internalType": "string",  "name": "appointmentId",   "type": "string"  }
+    ],
+    "name": "mintAppointmentToken",
+    "outputs": [
+      { "internalType": "uint256", "name": "tokenId", "type": "uint256" }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "name",
+    "outputs": [
+      { "internalType": "string", "name": "", "type": "string" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "uint256", "name": "tokenId", "type": "uint256" }
+    ],
+    "name": "ownerOf",
+    "outputs": [
+      { "internalType": "address", "name": "", "type": "address" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "address", "name": "from",    "type": "address" },
+      { "internalType": "address", "name": "to",      "type": "address" },
+      { "internalType": "uint256", "name": "tokenId", "type": "uint256" }
+    ],
+    "name": "safeTransferFrom",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
   },
   {
     "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "tokenId",
-        "type": "uint256"
-      }
+      { "internalType": "address", "name": "from",    "type": "address" },
+      { "internalType": "address", "name": "to",      "type": "address" },
+      { "internalType": "uint256", "name": "tokenId", "type": "uint256" },
+      { "internalType": "bytes",   "name": "",        "type": "bytes"   }
     ],
-    "name": "isTokenValid",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "patientId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "doctorId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "scheduledTime",
-        "type": "uint256"
-      }
-    ],
-    "name": "issueToken",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
+    "name": "safeTransferFrom",
+    "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "owner",
+    "inputs": [
+      { "internalType": "address", "name": "operator", "type": "address" },
+      { "internalType": "bool",    "name": "approved", "type": "bool"    }
+    ],
+    "name": "setApprovalForAll",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "bytes4", "name": "interfaceId", "type": "bytes4" }
+    ],
+    "name": "supportsInterface",
     "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
+      { "internalType": "bool", "name": "", "type": "bool" }
+    ],
+    "stateMutability": "pure",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "symbol",
+    "outputs": [
+      { "internalType": "string", "name": "", "type": "string" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "totalMinted",
+    "outputs": [
+      { "internalType": "uint256", "name": "", "type": "uint256" }
     ],
     "stateMutability": "view",
     "type": "function"
   },
   {
     "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
+      { "internalType": "address", "name": "from",    "type": "address" },
+      { "internalType": "address", "name": "to",      "type": "address" },
+      { "internalType": "uint256", "name": "tokenId", "type": "uint256" }
     ],
-    "name": "patientTokens",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "tokenCounter",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
+    "name": "transferFrom",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   }
 ]

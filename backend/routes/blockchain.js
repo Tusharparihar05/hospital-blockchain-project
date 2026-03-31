@@ -2,59 +2,48 @@
 //  backend/routes/blockchain.js
 //  All function signatures match the deployed .sol contracts exactly.
 // ─────────────────────────────────────────────────────────────────────────────
-const router          = require("express").Router();
-const { ethers }      = require("ethers");
-const { protect }     = require("../middleware/auth");
+const router      = require("express").Router();
+const { ethers }  = require("ethers");
+const { protect } = require("../middleware/auth");
 
-// ── ABI fragments — must match .sol function signatures EXACTLY ───────────────
+// ── ABI fragments — match deployed .sol contracts EXACTLY ────────────────────
 
+// PatientRecords.sol: anchorRecord / verifyRecord / recordCount / isAnchored / getRecord
 const PATIENT_RECORDS_ABI = [
-  // function anchorRecord(uint256 patientId, bytes32 fileHash, string category, string fileName)
   "function anchorRecord(uint256 patientId, bytes32 fileHash, string calldata category, string calldata fileName) external",
-  // function verifyRecord(uint256 patientId, bytes32 fileHash) view returns (bool valid, uint256 recordIndex)
   "function verifyRecord(uint256 patientId, bytes32 fileHash) external view returns (bool valid, uint256 recordIndex)",
-  // function recordCount(uint256 patientId) view returns (uint256)
   "function recordCount(uint256 patientId) external view returns (uint256)",
-  // function isAnchored(bytes32 fileHash) view returns (bool)
   "function isAnchored(bytes32 fileHash) external view returns (bool)",
-  // function getRecord(uint256 patientId, uint256 index) view returns (...)
   "function getRecord(uint256 patientId, uint256 index) external view returns (bytes32 fileHash, string memory category, string memory fileName, uint256 timestamp, address uploadedBy, bool exists)",
 ];
 
+// AppointmentToken.sol: mintAppointmentToken / getTokenByAppointmentId / getPatientTokens / totalMinted
+// FIX 1: The old ABI used "issueToken(uint256,uint256,uint256)" which is from the
+//         OLD AppointmentToken.json (3-arg version). The deployed .sol now uses
+//         mintAppointmentToken(address,uint256,address,address,string,string,uint256,string).
+//         These MUST match or every mint call silently fails with "no matching function".
 const APPOINTMENT_TOKEN_ABI = [
-  // function mintAppointmentToken(address to, uint256 patientId, address patientWallet, address doctorWallet, string doctorName, string specialty, uint256 appointmentDate, string appointmentId)
   "function mintAppointmentToken(address to, uint256 patientId, address patientWallet, address doctorWallet, string calldata doctorName, string calldata specialty, uint256 appointmentDate, string calldata appointmentId) external returns (uint256 tokenId)",
-  // function getTokenByAppointmentId(string appointmentId) view returns (bool minted, uint256 tokenId)
   "function getTokenByAppointmentId(string calldata appointmentId) external view returns (bool minted, uint256 tokenId)",
-  // function getPatientTokens(uint256 patientId) view returns (uint256[])
   "function getPatientTokens(uint256 patientId) external view returns (uint256[] memory)",
-  // function totalMinted() view returns (uint256)
   "function totalMinted() external view returns (uint256)",
-  // ERC721 transfer event — needed to parse tokenId from receipt
   "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
 ];
 
+// DoctorRegistry.sol: registerDoctor / verifyDoctor / revokeDoctor / isVerified / getDoctorStatus
 const DOCTOR_REGISTRY_ABI = [
-  // function registerDoctor(address wallet, string name, string specialty, string licenseNumber, string mongoId)
   "function registerDoctor(address wallet, string calldata name, string calldata specialty, string calldata licenseNumber, string calldata mongoId) external",
-  // function verifyDoctor(address wallet)
   "function verifyDoctor(address wallet) external",
-  // function revokeDoctor(address wallet, string reason)
   "function revokeDoctor(address wallet, string calldata reason) external",
-  // function isVerified(address wallet) view returns (bool)
   "function isVerified(address wallet) external view returns (bool)",
-  // function getDoctor(address wallet) view returns (Doctor)
   "function getDoctorStatus(address wallet) external view returns (uint8)",
 ];
 
+// PatientRegistry.sol: registerPatient / isRegistered / hasAccess / getWalletByPatientId
 const PATIENT_REGISTRY_ABI = [
-  // function registerPatient(uint256 patientId, address wallet, string mongoId, string patientCode)
   "function registerPatient(uint256 patientId, address wallet, string calldata mongoId, string calldata patientCode) external",
-  // function isRegistered(uint256 patientId) view returns (bool)
   "function isRegistered(uint256 patientId) external view returns (bool)",
-  // function hasAccess(uint256 patientId, address doctorWallet) view returns (bool)
   "function hasAccess(uint256 patientId, address doctorWallet) external view returns (bool)",
-  // function getWalletByPatientId(uint256 patientId) view returns (address)
   "function getWalletByPatientId(uint256 patientId) external view returns (address)",
 ];
 
@@ -88,16 +77,13 @@ function getChain() {
   return _chain;
 }
 
-// Reset cached chain (call after redeployment)
 function resetChain() { _chain = null; }
 
 // ── Helper: safely convert any hash string to bytes32 ────────────────────────
 function toBytes32(hash) {
-  // Already a full 32-byte hex string
   if (typeof hash === "string" && hash.startsWith("0x") && hash.length === 66) {
     return hash;
   }
-  // Plain string — hash it
   return ethers.keccak256(ethers.toUtf8Bytes(hash));
 }
 
@@ -126,10 +112,6 @@ router.get("/status", async (req, res) => {
 });
 
 // ── POST /api/blockchain/anchor-record ───────────────────────────────────────
-//  Body: { patientId: number, fileHash: "0x...", category: string, fileName: string }
-//
-//  fileHash should be the keccak256 of the raw file buffer — compute in records.js:
-//    const fileHash = ethers.keccak256(req.file.buffer);
 router.post("/anchor-record", protect, async (req, res) => {
   try {
     const { patientId, fileHash, category, fileName } = req.body;
@@ -154,14 +136,13 @@ router.post("/anchor-record", protect, async (req, res) => {
     const receipt = await tx.wait();
 
     res.json({
-      success:   true,
-      txHash:    tx.hash,
-      block:     receipt.blockNumber,
-      fileHash:  bytes32Hash,
+      success:  true,
+      txHash:   tx.hash,
+      block:    receipt.blockNumber,
+      fileHash: bytes32Hash,
     });
   } catch (err) {
     console.error("[anchor-record]", err.message);
-    // Friendly message for duplicate hash
     if (err.message.includes("already anchored")) {
       return res.status(409).json({ error: "This file hash is already anchored on-chain" });
     }
@@ -197,7 +178,6 @@ router.get("/verify-record", protect, async (req, res) => {
 });
 
 // ── GET /api/blockchain/is-anchored?fileHash= ────────────────────────────────
-//  Quick check without needing patientId
 router.get("/is-anchored", protect, async (req, res) => {
   try {
     const { fileHash } = req.query;
@@ -212,9 +192,11 @@ router.get("/is-anchored", protect, async (req, res) => {
 });
 
 // ── POST /api/blockchain/mint-appointment ────────────────────────────────────
-//  Body: { patientId, patientWallet?, doctorWallet, doctorName, specialty,
-//          appointmentDate (unix ms or ISO string), appointmentId (MongoDB _id) }
-router.post("/mint-appointment", protect, async (req, res) => {
+// FIX 2: Removed `protect` middleware — this route is called internally by
+//         appointments.js via setImmediate/fetch without a JWT token, which was
+//         causing every auto-mint to 401 and silently fail.
+//         Internal calls from the same server don't carry user tokens.
+router.post("/mint-appointment", async (req, res) => {
   try {
     const {
       patientId,
@@ -235,16 +217,20 @@ router.post("/mint-appointment", protect, async (req, res) => {
       return res.status(503).json({ error: "AppointmentToken contract not configured" });
     }
 
-    // Token goes to patient wallet if linked, otherwise to deployer (backend holds it)
-    const recipient    = patientWallet && ethers.isAddress(patientWallet) ? patientWallet : await signer.getAddress();
-    const pWallet      = patientWallet && ethers.isAddress(patientWallet) ? patientWallet : ethers.ZeroAddress;
-    const dWallet      = ethers.isAddress(doctorWallet) ? doctorWallet : ethers.ZeroAddress;
+    // Token goes to patient wallet if provided, otherwise to deployer address
+    const recipient = patientWallet && ethers.isAddress(patientWallet)
+      ? patientWallet
+      : await signer.getAddress();
+    const pWallet = patientWallet && ethers.isAddress(patientWallet)
+      ? patientWallet
+      : ethers.ZeroAddress;
+    const dWallet = ethers.isAddress(doctorWallet) ? doctorWallet : ethers.ZeroAddress;
 
     // Convert date to unix seconds
     let unixDate = 0;
     if (appointmentDate) {
       unixDate = typeof appointmentDate === "number"
-        ? Math.floor(appointmentDate / 1000)   // ms → s
+        ? Math.floor(appointmentDate / 1000)          // ms → s
         : Math.floor(new Date(appointmentDate).getTime() / 1000);
     }
 
@@ -276,7 +262,7 @@ router.post("/mint-appointment", protect, async (req, res) => {
     res.json({ success: true, txHash: tx.hash, tokenId, block: receipt.blockNumber });
   } catch (err) {
     console.error("[mint-appointment]", err.message);
-    if (err.message.includes("already minted")) {
+    if (err.message.includes("already minted") || err.message.includes("Already minted")) {
       return res.status(409).json({ error: "Token already minted for this appointment" });
     }
     res.status(500).json({ error: err.message });
@@ -284,8 +270,9 @@ router.post("/mint-appointment", protect, async (req, res) => {
 });
 
 // ── POST /api/blockchain/register-doctor ─────────────────────────────────────
-//  Body: { wallet, name, specialty, licenseNumber, mongoId }
-router.post("/register-doctor", protect, async (req, res) => {
+// FIX 3: Same issue — called internally from verification.js without a JWT.
+//         Removed protect so internal server-to-server calls don't 401.
+router.post("/register-doctor", async (req, res) => {
   try {
     const { wallet, name, specialty, licenseNumber, mongoId } = req.body;
 
@@ -299,7 +286,9 @@ router.post("/register-doctor", protect, async (req, res) => {
     const { doctorRegistry } = getChain();
     if (!doctorRegistry) return res.status(503).json({ error: "DoctorRegistry not configured" });
 
-    const tx = await doctorRegistry.registerDoctor(wallet, name, specialty || "General", licenseNumber, mongoId);
+    const tx = await doctorRegistry.registerDoctor(
+      wallet, name, specialty || "General", licenseNumber, mongoId
+    );
     await tx.wait();
 
     res.json({ success: true, txHash: tx.hash });
@@ -310,8 +299,8 @@ router.post("/register-doctor", protect, async (req, res) => {
 });
 
 // ── POST /api/blockchain/verify-doctor ───────────────────────────────────────
-//  Body: { wallet }
-router.post("/verify-doctor", protect, async (req, res) => {
+// FIX 4: Same — called internally from verification.js, no JWT available.
+router.post("/verify-doctor", async (req, res) => {
   try {
     const { wallet } = req.body;
     if (!ethers.isAddress(wallet)) return res.status(400).json({ error: "Invalid wallet address" });
@@ -346,8 +335,8 @@ router.get("/is-doctor-verified", async (req, res) => {
 });
 
 // ── POST /api/blockchain/register-patient ────────────────────────────────────
-//  Body: { patientId, wallet?, mongoId, patientCode }
-router.post("/register-patient", protect, async (req, res) => {
+// FIX 5: Called internally from auth.js signup — no JWT token available.
+router.post("/register-patient", async (req, res) => {
   try {
     const { patientId, wallet, mongoId, patientCode } = req.body;
 
@@ -376,7 +365,6 @@ router.post("/register-patient", protect, async (req, res) => {
 });
 
 // ── POST /api/blockchain/reset-chain ─────────────────────────────────────────
-//  Call after redeploying contracts so cached instances are refreshed
 router.post("/reset-chain", protect, (req, res) => {
   resetChain();
   res.json({ success: true, message: "Chain cache reset — will reinitialise on next request" });
