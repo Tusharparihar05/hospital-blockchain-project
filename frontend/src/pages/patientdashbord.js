@@ -534,6 +534,7 @@ export function PatientDashboard() {
             <div style={cardStyle}>
               <h3 style={{ color: COLORS.text, fontWeight: 700, fontSize: 15, marginBottom: 14 }}>Quick Actions</h3>
               <Link to="/patient/upload" style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderRadius: 10, border: `1px solid ${COLORS.cardBorder}`, color: COLORS.text, fontSize: 14, textDecoration: "none", background: COLORS.bg, marginBottom: 8 }}>📤 Upload Health Report</Link>
+              <Link to="/patient/analyze" style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderRadius: 10, border: `1px solid ${COLORS.cardBorder}`, color: COLORS.text, fontSize: 14, textDecoration: "none", background: COLORS.bg, marginBottom: 8 }}>🩺 Analyze Report with AI</Link>
               <button onClick={() => setActiveTab("reports")} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderRadius: 10, border: `1px solid ${COLORS.cardBorder}`, color: COLORS.text, fontSize: 14, background: COLORS.bg, cursor: "pointer", width: "100%" }}>📋 View All Reports ({reports.length})</button>
             </div>
             {specialties.length > 1 && (

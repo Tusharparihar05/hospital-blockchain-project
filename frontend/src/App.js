@@ -7,6 +7,7 @@ import PatientSubmit from "./pages/patientsubmit";
 import NotFound from "./pages/notfound";
 import Signup from "./pages/Signup";
 import Login from "./pages/Login";
+import MedicalReportAnalyzer from "./pages/MedicalReportAnalyzer";
 import { useState, useEffect, useCallback } from "react";
 import { connectWallet, shortAddress } from "./hooks/useBlockchain";
 import "./App.css";
@@ -819,6 +820,7 @@ export default function App() {
         <Route path="/doctor/submit"  element={<DoctorSubmitPage />} />
         <Route path="/patient/dashboard" element={<PatientDashboard />} />
         <Route path="/patient/upload" element={<PatientSubmit />} />
+        <Route path="/patient/analyze" element={<MedicalReportAnalyzer />} />
         <Route path="*"               element={<NotFound />} />
       </Routes>
     </Router>

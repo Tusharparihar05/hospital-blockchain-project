@@ -11,9 +11,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 
 
 const mongoUri = process.env.MONGODB_URI;
 if (!mongoUri) { console.error("❌ MONGODB_URI not set in .env"); process.exit(1); }
-
 if (!process.env.JWT_SECRET) {
-  console.error("❌ JWT_SECRET not set in .env — add JWT_SECRET=your_secret_here");
+  console.error("❌ JWT_SECRET not set in .env");
   process.exit(1);
 }
 
@@ -55,7 +54,6 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 userSchema.index({ role: 1, isActive: 1 });
-// FIX: sparse only — unique:true causes E11000 on second doctor registration
 userSchema.index({ patientId: 1 }, { sparse: true });
 
 userSchema.pre("save", async function () {
@@ -90,7 +88,6 @@ const recordSchema = new mongoose.Schema({
   blockchainTx:    { type: String, default: "" },
   ipfsCid:         { type: String, default: "" },
   ipfsUrl:         { type: String, default: "" },
-  // FIX: always starts false — only set true after a real on-chain tx is confirmed
   anchoredOnChain: { type: Boolean, default: false },
   anchoredAt:      { type: Date },
   doctorNotes:     { type: String, default: "" },
@@ -139,7 +136,7 @@ const licenceSchema = new mongoose.Schema({
 const LicenceVerification = mongoose.model("LicenceVerification", licenceSchema);
 
 // ══════════════════════════════════════════════════════════════════════════════
-// BLOCKCHAIN — PatientRecords contract (optional — skipped if .env not set)
+// BLOCKCHAIN — PatientRecords contract (optional)
 // ══════════════════════════════════════════════════════════════════════════════
 let _patientRecordsContract = null;
 
@@ -173,7 +170,7 @@ async function anchorOnChain(chainPatientId, fileHash, category, fileName) {
       return {
         success: false,
         anchored: false,
-        reason: "Blockchain not configured — set BLOCKCHAIN_RPC_URL, DEPLOYER_PRIVATE_KEY and PATIENT_RECORDS_ADDRESS in .env",
+        reason: "Blockchain not configured",
       };
     }
     const { ethers } = require("ethers");
@@ -196,15 +193,11 @@ async function anchorOnChain(chainPatientId, fileHash, category, fileName) {
 async function protect(req, res, next) {
   try {
     const header = req.headers.authorization || "";
-    if (!header.startsWith("Bearer ")) {
-      return res.status(401).json({ error: "No token provided" });
-    }
+    if (!header.startsWith("Bearer ")) return res.status(401).json({ error: "No token provided" });
     const token   = header.slice(7);
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user    = await User.findById(decoded.id).select("-passwordHash");
-    if (!user || !user.isActive) {
-      return res.status(401).json({ error: "User not found or deactivated" });
-    }
+    if (!user || !user.isActive) return res.status(401).json({ error: "User not found or deactivated" });
     req.user = user;
     next();
   } catch (err) {
@@ -213,23 +206,103 @@ async function protect(req, res, next) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ✅ GROQ AI HELPER
+// ══════════════════════════════════════════════════════════════════════════════
+async function analyzeWithGroq({ reportText, imageBase64, reportType, preferredLanguage, explainLevel, voiceFriendly }) {
+  const GROQ_API_KEY = process.env.GROQ_API_KEY;
+  if (!GROQ_API_KEY) throw new Error("GROQ_API_KEY not set in .env");
+
+  // Note: Groq does not support image input — if image sent, instruct user to paste text
+  const imageNote = imageBase64 ? "\n\nNote: The user uploaded an image. Please analyze it as a medical report image and extract all visible medical values, test results, and findings." : "";
+
+  const prompt = `You are an advanced AI medical assistant. Analyze the following medical report and respond ONLY with a valid JSON object. No markdown, no backticks, no explanation outside the JSON.
+
+Report Type: ${reportType || "General"}
+Preferred Language: ${preferredLanguage || "English"}
+Explanation Level: ${explainLevel || "simple"}
+
+The JSON must have EXACTLY these fields:
+{
+  "language": "${preferredLanguage || "English"}",
+  "summary": "A ${explainLevel === "simple" ? "simple, plain-language" : "detailed medical"} summary in ${preferredLanguage || "English"}. 3-5 sentences.",
+  "detailedExplanation": "A deeper explanation in ${preferredLanguage || "English"}. 2-4 sentences.",
+  "voiceText": ${voiceFriendly !== false ? `"A short, friendly voice summary in ${preferredLanguage || "English"}. 2-3 sentences."` : "null"},
+  "keyFindings": ["finding 1", "finding 2", "finding 3"],
+  "abnormalValues": [
+    { "name": "Parameter name", "value": "e.g. 10 g/dL", "status": "High | Low | Normal", "meaning": "Plain-language meaning in ${preferredLanguage || "English"}" }
+  ],
+  "recommendedActions": ["action 1", "action 2", "action 3"],
+  "precautions": ["precaution 1", "precaution 2"]
+}
+
+Rules:
+- All text must be in ${preferredLanguage || "English"}
+- abnormalValues: ONLY include values that are NOT normal
+- keyFindings: 3-6 important observations
+- recommendedActions: 3-5 practical steps
+- precautions: 2-4 warnings
+- Always end summary with: "Please consult a healthcare professional for medical decisions."
+- Respond with ONLY the JSON object, nothing else.
+
+Medical Report to analyze:
+${reportText}${imageNote}`;
+
+  const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.3,
+      max_tokens: 2000,
+      messages: [
+        {
+          role: "system",
+          content: "You are a medical report analyst. Always respond with ONLY a valid JSON object. No markdown, no backticks, no explanation outside the JSON.",
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+    }),
+  });
+
+  if (!groqRes.ok) {
+    const errData = await groqRes.json().catch(() => ({}));
+    throw new Error(errData.error?.message || `Groq API error: ${groqRes.status}`);
+  }
+
+  const data    = await groqRes.json();
+  const rawText = data.choices?.[0]?.message?.content || "";
+  const cleaned = rawText.replace(/```json|```/gi, "").trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    throw new Error("Groq returned invalid JSON. Please try again.");
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // SERVER
 // ══════════════════════════════════════════════════════════════════════════════
 function startServer() {
   app.use(cors());
-  app.use(express.json());
+  app.use(express.json({ limit: "10mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
   function randomHex(len = 8) {
     return [...Array(len)].map(() => Math.floor(Math.random() * 16).toString(16)).join("").toUpperCase();
   }
 
-  // FIX: returns a real signed JWT — old version returned "token_XXXXXXXX"
-  // which jwt.verify() always rejected causing every request to get 401
   function generateToken(userId) {
     return jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "7d" });
   }
 
-  app.get("/", (req, res) => res.json({ status: "ok", message: "MediChain Backend Running" }));
+  app.get("/", (req, res) => res.json({ status: "ok", message: "MediChain Backend Running ✅" }));
 
   // ══════════════════════════════════════════════════════════════════════════
   // AUTH
@@ -417,8 +490,7 @@ function startServer() {
   app.get("/api/doctors", async (req, res) => {
     try {
       const doctors = await User.find({ role: "doctor", isActive: true })
-        .select("-passwordHash -__v")
-        .lean();
+        .select("-passwordHash -__v").lean();
       res.json(doctors.map(d => ({
         id:           String(d._id),
         name:         d.name,
@@ -455,38 +527,28 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // FIX: uses .lean() — no .toSafeObject() call needed (plain object has no prototype methods)
   app.patch("/api/doctors/:id", protect, async (req, res) => {
     try {
       const { id } = req.params;
-      if (!mongoose.isValidObjectId(id)) {
-        return res.status(400).json({ error: "Invalid doctor ID" });
-      }
-      if (String(req.user._id) !== id && req.user.role !== "admin") {
+      if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: "Invalid doctor ID" });
+      if (String(req.user._id) !== id && req.user.role !== "admin")
         return res.status(403).json({ error: "Can only update your own profile" });
-      }
-      const allowedFields = [
-        "bio", "hospital", "education", "experience", "fee",
-        "specialty", "phone", "availability", "languages", "tags",
-      ];
+
+      const allowedFields = ["bio", "hospital", "education", "experience", "fee", "specialty", "phone", "availability", "languages", "tags"];
       const update = {};
       for (const key of allowedFields) {
         if (req.body[key] !== undefined) update[key] = req.body[key];
       }
-      if (Object.keys(update).length === 0) {
-        return res.status(400).json({ error: "No valid fields provided to update" });
-      }
+      if (Object.keys(update).length === 0) return res.status(400).json({ error: "No valid fields to update" });
       if (update.experience !== undefined) update.experience = Number(update.experience);
       if (update.fee        !== undefined) update.fee        = Number(update.fee);
 
       const doctor = await User.findOneAndUpdate(
-        { _id: id, role: "doctor" },
-        { $set: update },
-        { new: true, runValidators: true }
+        { _id: id, role: "doctor" }, { $set: update }, { new: true, runValidators: true }
       ).select("-passwordHash -__v").lean();
 
       if (!doctor) return res.status(404).json({ error: "Doctor not found" });
-      return res.json({ message: "Profile updated successfully", doctor: { ...doctor, id: String(doctor._id) } });
+      return res.json({ message: "Profile updated", doctor: { ...doctor, id: String(doctor._id) } });
     } catch (err) {
       console.error("doctor update error:", err);
       res.status(500).json({ error: err.message });
@@ -508,10 +570,7 @@ function startServer() {
 
   app.post("/api/appointments", async (req, res) => {
     try {
-      const {
-        patientId, doctorId, doctorName, dept, specialty,
-        date, time, isEmergency, type, fee, feePaid, paymentMethod,
-      } = req.body;
+      const { patientId, doctorId, doctorName, dept, specialty, date, time, isEmergency, type, fee, feePaid, paymentMethod } = req.body;
       if (!date || !time)  return res.status(400).json({ error: "date and time are required" });
       if (!patientId)      return res.status(400).json({ error: "patientId is required" });
 
@@ -553,9 +612,7 @@ function startServer() {
 
   app.put("/api/appointments/:id/complete", async (req, res) => {
     try {
-      const appt = await Appointment.findByIdAndUpdate(
-        req.params.id, { status: "completed" }, { new: true }
-      );
+      const appt = await Appointment.findByIdAndUpdate(req.params.id, { status: "completed" }, { new: true });
       if (!appt) return res.status(404).json({ error: "Appointment not found" });
       res.json({ message: "Appointment completed", appointment: { ...appt.toObject(), id: String(appt._id) } });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -563,9 +620,7 @@ function startServer() {
 
   app.put("/api/appointments/:id/reschedule", async (req, res) => {
     try {
-      const appt = await Appointment.findByIdAndUpdate(
-        req.params.id, { status: "reschedule-requested" }, { new: true }
-      );
+      const appt = await Appointment.findByIdAndUpdate(req.params.id, { status: "reschedule-requested" }, { new: true });
       if (!appt) return res.status(404).json({ error: "Appointment not found" });
       res.json({ message: "Reschedule requested", appointment: { ...appt.toObject(), id: String(appt._id) } });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -573,7 +628,6 @@ function startServer() {
 
   // ══════════════════════════════════════════════════════════════════════════
   // HEALTH RECORDS
-  // IMPORTANT: /api/records/file/:recordId MUST come before /api/records/:patientId
   // ══════════════════════════════════════════════════════════════════════════
 
   app.get("/api/records", async (req, res) => {
@@ -583,7 +637,6 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // MUST be registered before /api/records/:patientId
   app.get("/api/records/file/:recordId", async (req, res) => {
     try {
       const record = await MedicalRecord.findById(req.params.recordId).lean();
@@ -616,12 +669,10 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // ── POST /api/records ──────────────────────────────────────────────────────
   app.post("/api/records", upload.single("file"), async (req, res) => {
     try {
       const body = req.body;
       const file = req.file;
-
       const patientId = body.patientId;
       if (!patientId) return res.status(400).json({ error: "patientId is required" });
 
@@ -644,48 +695,19 @@ function startServer() {
       }
 
       const aiSummary = {
-        keyFindings:      [
-          "Document received and stored",
-          "Hash generated for integrity verification",
-          "Awaiting doctor review",
-        ],
-        plainLanguage:    "Your document has been uploaded successfully. A cryptographic fingerprint has been generated for integrity verification.",
-        recommendedSteps: [
-          "Wait for doctor to review",
-          "Check back for AI analysis",
-          "Your record is securely stored in MediChain",
-        ],
+        keyFindings: ["Document received and stored", "Hash generated for integrity verification", "Awaiting doctor review"],
+        plainLanguage: "Your document has been uploaded successfully.",
+        recommendedSteps: ["Wait for doctor to review", "Your record is securely stored in MediChain"],
       };
 
-      // ── FIX: anchoredOnChain is false on creation ──────────────────────────
-      // The old code had anchoredOnChain: !!fileHash which was ALWAYS true
-      // because fileHash is always set above. This made the UI show
-      // "Hash anchored on blockchain!" even when no blockchain tx ever happened.
-      // Now it starts false and is only set true below after a real tx confirms.
       const newRecord = await MedicalRecord.create({
-        patientId,
-        patientStrId:    patientId,
-        fileName,
-        category,
-        uploadDate:      new Date().toISOString().slice(0, 10),
-        doctor,
-        dept,
-        fileHash,
-        blockchainHash:  "",
-        blockchainTx:    "",
-        ipfsUrl,
-        anchoredOnChain: false,  // ← FIXED: was !!fileHash (always true)
-        aiSummary,
+        patientId, patientStrId: patientId, fileName, category,
+        uploadDate: new Date().toISOString().slice(0, 10),
+        doctor, dept, fileHash, blockchainHash: "", blockchainTx: "",
+        ipfsUrl, anchoredOnChain: false, aiSummary,
       });
 
-      // ── Attempt blockchain anchoring ───────────────────────────────────────
-      // Only runs if BLOCKCHAIN_RPC_URL, DEPLOYER_PRIVATE_KEY and
-      // PATIENT_RECORDS_ADDRESS are all set in .env AND patient has chainPatientId
-      let blockchainResult = {
-        success:  false,
-        anchored: false,
-        reason:   "No chainPatientId for this patient",
-      };
+      let blockchainResult = { success: false, anchored: false, reason: "No chainPatientId" };
 
       const patient = await User.findOne({
         $or: [
@@ -696,17 +718,11 @@ function startServer() {
       }).lean();
 
       if (patient?.chainPatientId) {
-        blockchainResult = await anchorOnChain(
-          patient.chainPatientId, fileHash, category, fileName
-        );
-
-        // Only update record when we have a real confirmed tx hash
+        blockchainResult = await anchorOnChain(patient.chainPatientId, fileHash, category, fileName);
         if (blockchainResult.success && blockchainResult.txHash) {
           await MedicalRecord.findByIdAndUpdate(newRecord._id, {
-            blockchainHash:  fileHash,
-            blockchainTx:    blockchainResult.txHash,
-            anchoredOnChain: true,  // ← set true ONLY here, after real tx
-            anchoredAt:      new Date(),
+            blockchainHash: fileHash, blockchainTx: blockchainResult.txHash,
+            anchoredOnChain: true, anchoredAt: new Date(),
           });
         }
       }
@@ -714,25 +730,13 @@ function startServer() {
       const finalAnchored = blockchainResult.success && !!blockchainResult.txHash;
 
       res.status(201).json({
-        message:  "Record saved",
-        record: {
-          ...newRecord.toObject(),
-          id:              String(newRecord._id),
-          anchoredOnChain: finalAnchored,
-          blockchainTx:    blockchainResult.txHash || null,
-          blockchainHash:  finalAnchored ? fileHash : "",
-        },
-        ipfsHash:   fileHash,
-        ipfsUrl,
-        aiSummary,
-        // FIX: blockchain object accurately reflects what actually happened
-        // so the frontend can show the correct status message
+        message: "Record saved",
+        record: { ...newRecord.toObject(), id: String(newRecord._id), anchoredOnChain: finalAnchored, blockchainTx: blockchainResult.txHash || null },
+        ipfsHash: fileHash, ipfsUrl, aiSummary,
         blockchain: {
-          attempted:       !!patient?.chainPatientId,
-          anchored:        finalAnchored,
-          txHash:          blockchainResult.txHash          || null,
-          alreadyAnchored: blockchainResult.alreadyAnchored || false,
-          reason:          finalAnchored ? null : (blockchainResult.reason || "Not anchored"),
+          attempted: !!patient?.chainPatientId, anchored: finalAnchored,
+          txHash: blockchainResult.txHash || null, alreadyAnchored: blockchainResult.alreadyAnchored || false,
+          reason: finalAnchored ? null : (blockchainResult.reason || "Not anchored"),
         },
       });
     } catch (err) {
@@ -797,7 +801,7 @@ function startServer() {
         verifiedAt:    formatOk ? new Date() : null,
         note:          formatOk
           ? "Mock pass: in production call your institutional API."
-          : "License reference failed basic format check (6–24 alphanumeric chars).",
+          : "License reference failed basic format check.",
       });
 
       res.status(201).json({ ...entry.toObject(), id: String(entry._id) });
@@ -808,10 +812,7 @@ function startServer() {
     try {
       const email = req.query.email;
       if (!email) return res.status(400).json({ error: "email query param required" });
-      const latest = await LicenceVerification
-        .findOne({ email: email.toLowerCase().trim() })
-        .sort({ createdAt: -1 })
-        .lean();
+      const latest = await LicenceVerification.findOne({ email: email.toLowerCase().trim() }).sort({ createdAt: -1 }).lean();
       if (!latest) return res.json({ status: "none", message: "No verification submitted yet." });
       res.json({ ...latest, id: String(latest._id) });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -828,33 +829,66 @@ function startServer() {
         walletAddress: { $regex: new RegExp(`^${walletAddress}$`, "i") },
       }).lean();
       res.json({
-        message:     "Wallet connected",
-        walletAddress,
+        message: "Wallet connected", walletAddress,
         patientId:   user?.patientId || null,
         patientName: user?.name      || null,
       });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // ✅ AI MEDICAL REPORT ANALYSIS — Powered by Groq (FREE)
+  // ══════════════════════════════════════════════════════════════════════════
+  app.post("/api/analyze-report", async (req, res) => {
+    try {
+      const { reportText, imageBase64, imageMimeType, reportType, preferredLanguage, explainLevel, voiceFriendly } = req.body;
+
+      if (!reportText?.trim() && !imageBase64)
+        return res.status(400).json({ error: "reportText or imageBase64 is required" });
+
+      if (!process.env.GROQ_API_KEY)
+        return res.status(503).json({
+          error: "GROQ_API_KEY not set in backend/.env. Get a free key at https://console.groq.com/keys",
+        });
+
+      const result = await analyzeWithGroq({
+        reportText:        reportText?.trim() || "",
+        imageBase64:       imageBase64        || null,
+        imageMimeType:     imageMimeType      || "image/jpeg",
+        reportType:        reportType         || "General",
+        preferredLanguage: preferredLanguage  || "English",
+        explainLevel:      explainLevel       || "simple",
+        voiceFriendly:     voiceFriendly      !== false,
+      });
+
+      return res.json(result);
+
+    } catch (err) {
+      console.error("[analyze-report] Groq error:", err.message);
+
+      if (err.message.includes("401") || err.message.includes("invalid_api_key")) {
+        return res.status(401).json({ error: "Invalid Groq API key. Check GROQ_API_KEY in backend/.env" });
+      }
+      if (err.message.includes("429")) {
+        return res.status(429).json({ error: "Groq rate limit hit. Wait a moment and try again." });
+      }
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   app.use((req, res) => res.status(404).json({ error: `Route ${req.method} ${req.path} not found` }));
 
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {
-    console.log(`\nMediChain backend running on http://localhost:${PORT}`);
-    console.log("\nBlockchain status:");
-    console.log("  BLOCKCHAIN_RPC_URL:      ", process.env.BLOCKCHAIN_RPC_URL      ? "✅ set" : "❌ not set — anchoring disabled");
-    console.log("  DEPLOYER_PRIVATE_KEY:    ", process.env.DEPLOYER_PRIVATE_KEY    ? "✅ set" : "❌ not set — anchoring disabled");
-    console.log("  PATIENT_RECORDS_ADDRESS: ", process.env.PATIENT_RECORDS_ADDRESS ? "✅ set" : "❌ not set — anchoring disabled");
-    console.log("\nRoutes:");
-    console.log("  POST  /api/auth/signup | login | wallet-login");
-    console.log("  GET   /api/patients");
-    console.log("  GET   /api/doctors          PATCH /api/doctors/:id");
-    console.log("  GET   /api/appointments     POST  /api/appointments");
-    console.log("  GET   /api/records/file/:id       ← registered before /:patientId");
-    console.log("  GET   /api/records/:patientId");
-    console.log("  POST  /api/records");
-    console.log("  GET   /api/dashboard");
-    console.log("  POST  /api/emergency");
-    console.log("  POST  /api/verification/doctor-license\n");
+    console.log(`\n✅ MediChain backend running → http://localhost:${PORT}`);
+    console.log("\n🤖 AI Engine: Groq LLaMA 3.3 70B (FREE)");
+    console.log("   GROQ_API_KEY:", process.env.GROQ_API_KEY ? "✅ set" : "❌ NOT SET — get one free at https://console.groq.com/keys");
+    console.log("\n⛓  Blockchain:");
+    console.log("   BLOCKCHAIN_RPC_URL:     ", process.env.BLOCKCHAIN_RPC_URL      ? "✅ set" : "❌ not set");
+    console.log("   PATIENT_RECORDS_ADDRESS:", process.env.PATIENT_RECORDS_ADDRESS ? "✅ set" : "❌ not set");
+    console.log("\n📡 Routes ready:");
+    console.log("   POST /api/analyze-report  ← Groq AI analysis");
+    console.log("   POST /api/auth/signup | login | wallet-login");
+    console.log("   GET  /api/patients | doctors | appointments | records\n");
   });
 }
