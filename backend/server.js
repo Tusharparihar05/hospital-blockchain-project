@@ -74,24 +74,31 @@ userSchema.methods.comparePassword = function (plain) {
 const User = mongoose.model("User", userSchema);
 
 // ── Health Record ─────────────────────────────────────────────────────────────
+// PATCHED: includes doctor-upload fields from the backend patch file
 const recordSchema = new mongoose.Schema({
-  patientId:       { type: String, required: true, index: true },
-  patientStrId:    { type: String, default: "" },
-  uploadedBy:      { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-  fileName:        { type: String, default: "" },
-  category:        { type: String, default: "General" },
-  uploadDate:      { type: String, default: () => new Date().toISOString().slice(0, 10) },
-  doctor:          { type: String, default: "Self Upload" },
-  dept:            { type: String, default: "" },
-  fileHash:        { type: String, default: "" },
-  blockchainHash:  { type: String, default: "" },
-  blockchainTx:    { type: String, default: "" },
-  ipfsCid:         { type: String, default: "" },
-  ipfsUrl:         { type: String, default: "" },
-  anchoredOnChain: { type: Boolean, default: false },
-  anchoredAt:      { type: Date },
-  doctorNotes:     { type: String, default: "" },
-  aiSummary:       { type: mongoose.Schema.Types.Mixed, default: null },
+  patientId:          { type: String, required: true, index: true },
+  patientStrId:       { type: String, default: "" },
+  patientName:        { type: String, default: "" },           // doctor-upload patch
+  uploadedBy:         { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  uploadedByDoctor:   { type: Boolean, default: false },       // true when doctor uploads
+  doctorId:           { type: String, default: "" },           // doctor's user ID
+  doctorName:         { type: String, default: "" },           // doctor's display name
+  doctorComment:      { type: String, default: "" },           // doctor's clinical notes
+  recommendation:     { type: String, default: "" },           // doctor's recommendations
+  fileName:           { type: String, default: "" },
+  category:           { type: String, default: "General" },
+  uploadDate:         { type: String, default: () => new Date().toISOString().slice(0, 10) },
+  doctor:             { type: String, default: "Self Upload" },
+  dept:               { type: String, default: "" },
+  fileHash:           { type: String, default: "" },
+  blockchainHash:     { type: String, default: "" },
+  blockchainTx:       { type: String, default: "" },
+  ipfsCid:            { type: String, default: "" },
+  ipfsUrl:            { type: String, default: "" },
+  anchoredOnChain:    { type: Boolean, default: false },
+  anchoredAt:         { type: Date },
+  doctorNotes:        { type: String, default: "" },           // legacy field kept
+  aiSummary:          { type: mongoose.Schema.Types.Mixed, default: null },
 }, { timestamps: true });
 
 const MedicalRecord = mongoose.model("MedicalRecord", recordSchema);
@@ -184,7 +191,7 @@ async function anchorOnChain(chainPatientId, fileHash, category, fileName) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ✅ WAV HEADER BUILDER — converts raw PCM from Gemini TTS to playable WAV
+// WAV HEADER BUILDER — converts raw PCM from Gemini TTS to playable WAV
 // ══════════════════════════════════════════════════════════════════════════════
 function buildWavBuffer(pcmBuffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16) {
   const byteRate    = sampleRate * numChannels * (bitsPerSample / 8);
@@ -193,22 +200,19 @@ function buildWavBuffer(pcmBuffer, sampleRate = 24000, numChannels = 1, bitsPerS
   const headerSize  = 44;
   const wavBuffer   = Buffer.alloc(headerSize + dataSize);
 
-  // RIFF chunk
   wavBuffer.write("RIFF", 0);
   wavBuffer.writeUInt32LE(36 + dataSize, 4);
   wavBuffer.write("WAVE", 8);
 
-  // fmt sub-chunk
   wavBuffer.write("fmt ", 12);
-  wavBuffer.writeUInt32LE(16, 16);           // PCM sub-chunk size
-  wavBuffer.writeUInt16LE(1, 20);            // AudioFormat = PCM
+  wavBuffer.writeUInt32LE(16, 16);
+  wavBuffer.writeUInt16LE(1, 20);
   wavBuffer.writeUInt16LE(numChannels, 22);
   wavBuffer.writeUInt32LE(sampleRate, 24);
   wavBuffer.writeUInt32LE(byteRate, 28);
   wavBuffer.writeUInt16LE(blockAlign, 32);
   wavBuffer.writeUInt16LE(bitsPerSample, 34);
 
-  // data sub-chunk
   wavBuffer.write("data", 36);
   wavBuffer.writeUInt32LE(dataSize, 40);
   pcmBuffer.copy(wavBuffer, 44);
@@ -235,7 +239,7 @@ async function protect(req, res, next) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ✅ GROQ AI HELPER
+// GROQ AI HELPER
 // ══════════════════════════════════════════════════════════════════════════════
 async function analyzeWithGroq({ reportText, imageBase64, reportType, preferredLanguage, explainLevel, voiceFriendly }) {
   const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -448,7 +452,7 @@ function startServer() {
       const user = await User.findOne({
         walletAddress: { $regex: new RegExp(`^${walletAddress}$`, "i") },
         isActive: true,
-      });
+      }).lean();
       if (!user) return res.status(404).json({ error: "No account found for this wallet" });
       const token = generateToken(user._id);
       return res.json({
@@ -683,12 +687,14 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // PATCHED: GET /api/records/:patientId — matches on both patientStrId and patientId
   app.get("/api/records/:patientId", async (req, res) => {
     try {
       const pid     = req.params.patientId;
       const records = await MedicalRecord.find({
         $or: [
           { patientStrId: pid },
+          { patientId: pid },
           { patientId: mongoose.isValidObjectId(pid) ? pid : undefined },
         ],
       }).sort({ createdAt: -1 }).lean();
@@ -696,6 +702,7 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // PATCHED: POST /api/records — supports doctor-upload fields
   app.post("/api/records", upload.single("file"), async (req, res) => {
     try {
       const body = req.body;
@@ -703,12 +710,19 @@ function startServer() {
       const patientId = body.patientId;
       if (!patientId) return res.status(400).json({ error: "patientId is required" });
 
-      const category = body.category || body.type || "General";
-      const doctor   = body.doctor   || "Self Upload";
-      const dept     = body.dept     || category;
-      let   fileHash = body.fileHash || "";
-      let   fileName = body.fileName || "";
-      let   ipfsUrl  = "";
+      const category         = body.category || body.type || "General";
+      const doctor           = body.doctor   || "Self Upload";
+      const dept             = body.dept     || category;
+      const doctorComment    = body.doctorComment  || "";
+      const recommendation   = body.recommendation || "";
+      const uploadedByDoctor = body.uploadedByDoctor === "true" || body.uploadedByDoctor === true;
+      const doctorId         = body.doctorId   || "";
+      const doctorNameField  = body.doctorName || "";
+      const patientNameField = body.patientName || "";
+
+      let fileHash = body.fileHash || "";
+      let fileName = body.fileName || "";
+      let ipfsUrl  = "";
 
       if (file) {
         fileName = fileName || file.originalname || `Upload_${Date.now()}.pdf`;
@@ -722,16 +736,36 @@ function startServer() {
       }
 
       const aiSummary = {
-        keyFindings: ["Document received and stored", "Hash generated for integrity verification", "Awaiting doctor review"],
-        plainLanguage: "Your document has been uploaded successfully.",
-        recommendedSteps: ["Wait for doctor to review", "Your record is securely stored in MediChain"],
+        keyFindings:      ["Document received and stored", "Hash generated for integrity verification", "Awaiting review"],
+        plainLanguage:    uploadedByDoctor
+          ? `Your doctor (${doctorNameField || doctor}) has uploaded a ${category} report for you.`
+          : "Your document has been uploaded successfully.",
+        recommendedSteps: uploadedByDoctor && recommendation
+          ? [recommendation]
+          : ["Wait for doctor to review", "Your record is securely stored in MediChain"],
       };
 
       const newRecord = await MedicalRecord.create({
-        patientId, patientStrId: patientId, fileName, category,
-        uploadDate: new Date().toISOString().slice(0, 10),
-        doctor, dept, fileHash, blockchainHash: "", blockchainTx: "",
-        ipfsUrl, anchoredOnChain: false, aiSummary,
+        patientId,
+        patientStrId:     patientId,
+        patientName:      patientNameField,
+        uploadedByDoctor: uploadedByDoctor,
+        doctorId:         doctorId,
+        doctorName:       doctorNameField || (uploadedByDoctor ? doctor : ""),
+        doctorComment:    doctorComment,
+        recommendation:   recommendation,
+        fileName,
+        category,
+        uploadDate:       new Date().toISOString().slice(0, 10),
+        doctor,
+        dept,
+        fileHash,
+        blockchainHash:   "",
+        blockchainTx:     "",
+        ipfsUrl,
+        anchoredOnChain:  false,
+        doctorNotes:      doctorComment,   // keep legacy field in sync
+        aiSummary,
       });
 
       let blockchainResult = { success: false, anchored: false, reason: "No chainPatientId" };
@@ -748,8 +782,10 @@ function startServer() {
         blockchainResult = await anchorOnChain(patient.chainPatientId, fileHash, category, fileName);
         if (blockchainResult.success && blockchainResult.txHash) {
           await MedicalRecord.findByIdAndUpdate(newRecord._id, {
-            blockchainHash: fileHash, blockchainTx: blockchainResult.txHash,
-            anchoredOnChain: true, anchoredAt: new Date(),
+            blockchainHash: fileHash,
+            blockchainTx:   blockchainResult.txHash,
+            anchoredOnChain: true,
+            anchoredAt:     new Date(),
           });
         }
       }
@@ -758,12 +794,21 @@ function startServer() {
 
       res.status(201).json({
         message: "Record saved",
-        record: { ...newRecord.toObject(), id: String(newRecord._id), anchoredOnChain: finalAnchored, blockchainTx: blockchainResult.txHash || null },
-        ipfsHash: fileHash, ipfsUrl, aiSummary,
+        record: {
+          ...newRecord.toObject(),
+          id:              String(newRecord._id),
+          anchoredOnChain: finalAnchored,
+          blockchainTx:    blockchainResult.txHash || null,
+        },
+        ipfsHash: fileHash,
+        ipfsUrl,
+        aiSummary,
         blockchain: {
-          attempted: !!patient?.chainPatientId, anchored: finalAnchored,
-          txHash: blockchainResult.txHash || null, alreadyAnchored: blockchainResult.alreadyAnchored || false,
-          reason: finalAnchored ? null : (blockchainResult.reason || "Not anchored"),
+          attempted:      !!patient?.chainPatientId,
+          anchored:       finalAnchored,
+          txHash:         blockchainResult.txHash || null,
+          alreadyAnchored: blockchainResult.alreadyAnchored || false,
+          reason:         finalAnchored ? null : (blockchainResult.reason || "Not anchored"),
         },
       });
     } catch (err) {
@@ -864,7 +909,7 @@ function startServer() {
   });
 
   // ══════════════════════════════════════════════════════════════════════════
-  // ✅ AI MEDICAL REPORT ANALYSIS — Powered by Groq (FREE)
+  // AI MEDICAL REPORT ANALYSIS — Powered by Groq (FREE)
   // ══════════════════════════════════════════════════════════════════════════
   app.post("/api/analyze-report", async (req, res) => {
     try {
@@ -901,13 +946,7 @@ function startServer() {
   });
 
   // ══════════════════════════════════════════════════════════════════════════
-  // ✅ GEMINI TTS — FIXED: converts raw PCM → proper WAV with headers
-  //
-  //  Root cause of "no supported source was found":
-  //  Gemini TTS returns raw 16-bit PCM audio at 24 kHz.
-  //  The browser cannot play raw PCM — it needs a WAV file with a RIFF
-  //  header.  buildWavBuffer() prepends the 44-byte header so the browser
-  //  can decode it natively as audio/wav.
+  // GEMINI TTS — converts raw PCM → proper WAV with headers
   // ══════════════════════════════════════════════════════════════════════════
   app.post("/api/tts", async (req, res) => {
     try {
@@ -920,7 +959,6 @@ function startServer() {
           error: "GEMINI_API_KEY not set in backend/.env. Get free key at https://aistudio.google.com/app/apikey",
         });
 
-      // ── 1. Call Gemini TTS ──────────────────────────────────────────────
       const geminiRes = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${GEMINI_API_KEY}`,
         {
@@ -948,34 +986,27 @@ function startServer() {
       const data     = await geminiRes.json();
       const part     = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
       const audioB64 = part?.data;
-      const mimeType = part?.mimeType || "audio/L16;rate=24000";   // raw PCM fallback
+      const mimeType = part?.mimeType || "audio/L16;rate=24000";
 
       if (!audioB64) throw new Error("No audio returned from Gemini TTS");
 
       const rawBuffer = Buffer.from(audioB64, "base64");
 
-      // ── 2. Wrap raw PCM in a WAV container so browsers can play it ──────
-      //    Gemini returns audio/L16 (signed 16-bit little-endian PCM) at
-      //    24 000 Hz, mono.  We detect this from the mimeType and wrap it.
       let responseBuffer;
       let responseMime;
 
       if (mimeType.startsWith("audio/L16") || mimeType.startsWith("audio/pcm") || mimeType === "audio/wav") {
-        // Parse sample rate from mimeType if present, e.g. "audio/L16;rate=24000"
         const rateMatch  = mimeType.match(/rate=(\d+)/i);
         const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
-
         responseBuffer = buildWavBuffer(rawBuffer, sampleRate, 1, 16);
         responseMime   = "audio/wav";
         console.log(`[tts] Wrapped ${rawBuffer.length} bytes PCM → ${responseBuffer.length} bytes WAV (${sampleRate} Hz)`);
       } else {
-        // Already a container format (mp3, ogg, etc.) — send as-is
         responseBuffer = rawBuffer;
         responseMime   = mimeType;
         console.log(`[tts] Passing through ${mimeType} audio (${rawBuffer.length} bytes)`);
       }
 
-      // ── 3. Send the audio to the client ────────────────────────────────
       res.set("Content-Type",   responseMime);
       res.set("Content-Length", responseBuffer.length);
       res.set("Cache-Control",  "no-cache");
@@ -999,9 +1030,10 @@ function startServer() {
     console.log("   BLOCKCHAIN_RPC_URL:     ", process.env.BLOCKCHAIN_RPC_URL      ? "✅ set" : "❌ not set");
     console.log("   PATIENT_RECORDS_ADDRESS:", process.env.PATIENT_RECORDS_ADDRESS ? "✅ set" : "❌ not set");
     console.log("\n📡 Routes ready:");
-    console.log("   POST /api/analyze-report  ← Groq AI analysis");
-    console.log("   POST /api/tts             ← Gemini TTS (PCM → WAV fixed)");
+    console.log("   POST /api/analyze-report           ← Groq AI analysis");
+    console.log("   POST /api/tts                      ← Gemini TTS (PCM → WAV)");
     console.log("   POST /api/auth/signup | login | wallet-login");
-    console.log("   GET  /api/patients | doctors | appointments | records\n");
+    console.log("   GET  /api/patients | doctors | appointments | records");
+    console.log("   POST /api/records                  ← supports doctor-upload fields\n");
   });
 }
