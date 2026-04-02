@@ -167,11 +167,7 @@ async function anchorOnChain(chainPatientId, fileHash, category, fileName) {
   try {
     const contract = getPatientRecordsContract();
     if (!contract) {
-      return {
-        success: false,
-        anchored: false,
-        reason: "Blockchain not configured",
-      };
+      return { success: false, anchored: false, reason: "Blockchain not configured" };
     }
     const { ethers } = require("ethers");
     const already = await contract.isAnchored(fileHash);
@@ -185,6 +181,39 @@ async function anchorOnChain(chainPatientId, fileHash, category, fileName) {
     console.error("[anchorOnChain]", err.message);
     return { success: false, anchored: false, reason: err.message };
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ✅ WAV HEADER BUILDER — converts raw PCM from Gemini TTS to playable WAV
+// ══════════════════════════════════════════════════════════════════════════════
+function buildWavBuffer(pcmBuffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16) {
+  const byteRate    = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign  = numChannels * (bitsPerSample / 8);
+  const dataSize    = pcmBuffer.length;
+  const headerSize  = 44;
+  const wavBuffer   = Buffer.alloc(headerSize + dataSize);
+
+  // RIFF chunk
+  wavBuffer.write("RIFF", 0);
+  wavBuffer.writeUInt32LE(36 + dataSize, 4);
+  wavBuffer.write("WAVE", 8);
+
+  // fmt sub-chunk
+  wavBuffer.write("fmt ", 12);
+  wavBuffer.writeUInt32LE(16, 16);           // PCM sub-chunk size
+  wavBuffer.writeUInt16LE(1, 20);            // AudioFormat = PCM
+  wavBuffer.writeUInt16LE(numChannels, 22);
+  wavBuffer.writeUInt32LE(sampleRate, 24);
+  wavBuffer.writeUInt32LE(byteRate, 28);
+  wavBuffer.writeUInt16LE(blockAlign, 32);
+  wavBuffer.writeUInt16LE(bitsPerSample, 34);
+
+  // data sub-chunk
+  wavBuffer.write("data", 36);
+  wavBuffer.writeUInt32LE(dataSize, 40);
+  pcmBuffer.copy(wavBuffer, 44);
+
+  return wavBuffer;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -212,8 +241,9 @@ async function analyzeWithGroq({ reportText, imageBase64, reportType, preferredL
   const GROQ_API_KEY = process.env.GROQ_API_KEY;
   if (!GROQ_API_KEY) throw new Error("GROQ_API_KEY not set in .env");
 
-  // Note: Groq does not support image input — if image sent, instruct user to paste text
-  const imageNote = imageBase64 ? "\n\nNote: The user uploaded an image. Please analyze it as a medical report image and extract all visible medical values, test results, and findings." : "";
+  const imageNote = imageBase64
+    ? "\n\nNote: The user uploaded an image. Please analyze it as a medical report image and extract all visible medical values, test results, and findings."
+    : "";
 
   const prompt = `You are an advanced AI medical assistant. Analyze the following medical report and respond ONLY with a valid JSON object. No markdown, no backticks, no explanation outside the JSON.
 
@@ -262,10 +292,7 @@ ${reportText}${imageNote}`;
           role: "system",
           content: "You are a medical report analyst. Always respond with ONLY a valid JSON object. No markdown, no backticks, no explanation outside the JSON.",
         },
-        {
-          role: "user",
-          content: prompt,
-        },
+        { role: "user", content: prompt },
       ],
     }),
   });
@@ -865,13 +892,97 @@ function startServer() {
 
     } catch (err) {
       console.error("[analyze-report] Groq error:", err.message);
-
-      if (err.message.includes("401") || err.message.includes("invalid_api_key")) {
+      if (err.message.includes("401") || err.message.includes("invalid_api_key"))
         return res.status(401).json({ error: "Invalid Groq API key. Check GROQ_API_KEY in backend/.env" });
-      }
-      if (err.message.includes("429")) {
+      if (err.message.includes("429"))
         return res.status(429).json({ error: "Groq rate limit hit. Wait a moment and try again." });
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ✅ GEMINI TTS — FIXED: converts raw PCM → proper WAV with headers
+  //
+  //  Root cause of "no supported source was found":
+  //  Gemini TTS returns raw 16-bit PCM audio at 24 kHz.
+  //  The browser cannot play raw PCM — it needs a WAV file with a RIFF
+  //  header.  buildWavBuffer() prepends the 44-byte header so the browser
+  //  can decode it natively as audio/wav.
+  // ══════════════════════════════════════════════════════════════════════════
+  app.post("/api/tts", async (req, res) => {
+    try {
+      const { text, langCode } = req.body;
+      if (!text?.trim()) return res.status(400).json({ error: "text is required" });
+
+      const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+      if (!GEMINI_API_KEY)
+        return res.status(503).json({
+          error: "GEMINI_API_KEY not set in backend/.env. Get free key at https://aistudio.google.com/app/apikey",
+        });
+
+      // ── 1. Call Gemini TTS ──────────────────────────────────────────────
+      const geminiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: text.slice(0, 1000) }] }],
+            generationConfig: {
+              responseModalities: ["AUDIO"],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: { voiceName: "Kore" },
+                },
+              },
+            },
+          }),
+        }
+      );
+
+      if (!geminiRes.ok) {
+        const errData = await geminiRes.json().catch(() => ({}));
+        throw new Error(errData.error?.message || `Gemini TTS error ${geminiRes.status}`);
       }
+
+      const data     = await geminiRes.json();
+      const part     = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+      const audioB64 = part?.data;
+      const mimeType = part?.mimeType || "audio/L16;rate=24000";   // raw PCM fallback
+
+      if (!audioB64) throw new Error("No audio returned from Gemini TTS");
+
+      const rawBuffer = Buffer.from(audioB64, "base64");
+
+      // ── 2. Wrap raw PCM in a WAV container so browsers can play it ──────
+      //    Gemini returns audio/L16 (signed 16-bit little-endian PCM) at
+      //    24 000 Hz, mono.  We detect this from the mimeType and wrap it.
+      let responseBuffer;
+      let responseMime;
+
+      if (mimeType.startsWith("audio/L16") || mimeType.startsWith("audio/pcm") || mimeType === "audio/wav") {
+        // Parse sample rate from mimeType if present, e.g. "audio/L16;rate=24000"
+        const rateMatch  = mimeType.match(/rate=(\d+)/i);
+        const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
+
+        responseBuffer = buildWavBuffer(rawBuffer, sampleRate, 1, 16);
+        responseMime   = "audio/wav";
+        console.log(`[tts] Wrapped ${rawBuffer.length} bytes PCM → ${responseBuffer.length} bytes WAV (${sampleRate} Hz)`);
+      } else {
+        // Already a container format (mp3, ogg, etc.) — send as-is
+        responseBuffer = rawBuffer;
+        responseMime   = mimeType;
+        console.log(`[tts] Passing through ${mimeType} audio (${rawBuffer.length} bytes)`);
+      }
+
+      // ── 3. Send the audio to the client ────────────────────────────────
+      res.set("Content-Type",   responseMime);
+      res.set("Content-Length", responseBuffer.length);
+      res.set("Cache-Control",  "no-cache");
+      return res.send(responseBuffer);
+
+    } catch (err) {
+      console.error("[tts] error:", err.message);
       return res.status(500).json({ error: err.message });
     }
   });
@@ -882,12 +993,14 @@ function startServer() {
   app.listen(PORT, () => {
     console.log(`\n✅ MediChain backend running → http://localhost:${PORT}`);
     console.log("\n🤖 AI Engine: Groq LLaMA 3.3 70B (FREE)");
-    console.log("   GROQ_API_KEY:", process.env.GROQ_API_KEY ? "✅ set" : "❌ NOT SET — get one free at https://console.groq.com/keys");
+    console.log("   GROQ_API_KEY:",   process.env.GROQ_API_KEY   ? "✅ set" : "❌ NOT SET — get one free at https://console.groq.com/keys");
+    console.log("   GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? "✅ set" : "❌ NOT SET — get one free at https://aistudio.google.com/app/apikey");
     console.log("\n⛓  Blockchain:");
     console.log("   BLOCKCHAIN_RPC_URL:     ", process.env.BLOCKCHAIN_RPC_URL      ? "✅ set" : "❌ not set");
     console.log("   PATIENT_RECORDS_ADDRESS:", process.env.PATIENT_RECORDS_ADDRESS ? "✅ set" : "❌ not set");
     console.log("\n📡 Routes ready:");
     console.log("   POST /api/analyze-report  ← Groq AI analysis");
+    console.log("   POST /api/tts             ← Gemini TTS (PCM → WAV fixed)");
     console.log("   POST /api/auth/signup | login | wallet-login");
     console.log("   GET  /api/patients | doctors | appointments | records\n");
   });
