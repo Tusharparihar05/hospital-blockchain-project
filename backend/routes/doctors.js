@@ -1,3 +1,5 @@
+// backend/routes/doctors.js
+// UPDATED — adds PUT /api/doctors/:id/location  +  GET nearby support
 const router = require("express").Router();
 const User   = require("../models/User");
 const { protect, allow } = require("../middleware/auth");
@@ -36,6 +38,9 @@ router.get("/", async (req, res) => {
       patients:        d.reviewCount * 3  || 0,
       todayAppts:      d.availability?.length || 0,
       reviews:         [],
+      // ── NEW location fields ──────────────────────────────────────────────
+      location: d.location || { lat: null, lng: null, address: "" },
+      isOnline:  d.isOnline !== undefined ? d.isOnline : true,
     }));
     res.json(shaped);
   } catch (err) {
@@ -46,7 +51,6 @@ router.get("/", async (req, res) => {
 // ── GET /api/doctors/:id ──────────────────────────────────────────────────────
 router.get("/:id", async (req, res) => {
   try {
-    // FIX: use .lean() — no Mongoose methods needed on a plain GET
     const d = await User.findOne({ _id: req.params.id, role: "doctor" })
       .select("-passwordHash")
       .lean();
@@ -71,6 +75,9 @@ router.get("/:id", async (req, res) => {
       licenseVerified: d.licenseVerified,
       licenseNumber:   d.licenseNumber,
       conditions:      d.tags || [],
+      // ── NEW ──
+      location: d.location || { lat: null, lng: null, address: "" },
+      isOnline:  d.isOnline !== undefined ? d.isOnline : true,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -96,9 +103,6 @@ router.patch("/:id", protect, allow("doctor", "admin"), async (req, res) => {
       return res.status(400).json({ error: "No valid fields to update" });
     }
 
-    // FIX: use .lean() — plain object, no Mongoose instance methods needed
-    // The old code called .toSafeObject() on a .lean() result which is just
-    // a plain JS object and has no prototype methods → TypeError → 500
     const updated = await User.findByIdAndUpdate(
       req.params.id,
       { $set: updates },
@@ -106,12 +110,82 @@ router.patch("/:id", protect, allow("doctor", "admin"), async (req, res) => {
     ).select("-passwordHash -__v").lean();
 
     if (!updated) return res.status(404).json({ error: "Doctor not found" });
-
-    // FIX: spread the plain lean object directly — no .toSafeObject() call
     res.json({ ...updated, id: String(updated._id) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// ── PUT /api/doctors/:id/location — doctor saves their clinic location ────────
+//    Body: { lat, lng, address }   (GPS) OR { address }  (text — geocoded on frontend)
+//    The frontend sends lat+lng after geocoding the text address via Nominatim.
+router.put("/:id/location", protect, allow("doctor", "admin"), async (req, res) => {
+  try {
+    if (String(req.user._id) !== req.params.id && req.user.role !== "admin") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const { lat, lng, address } = req.body;
+
+    // Basic validation
+    if (lat == null || lng == null) {
+      return res.status(400).json({ error: "lat and lng are required" });
+    }
+    const latNum = parseFloat(lat);
+    const lngNum = parseFloat(lng);
+    if (isNaN(latNum) || isNaN(lngNum)) {
+      return res.status(400).json({ error: "lat and lng must be numbers" });
+    }
+
+    const updated = await User.findByIdAndUpdate(
+      req.params.id,
+      { $set: { location: { lat: latNum, lng: lngNum, address: address || "" } } },
+      { new: true }
+    ).select("name location").lean();
+
+    if (!updated) return res.status(404).json({ error: "Doctor not found" });
+    res.json({ success: true, location: updated.location });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PUT /api/doctors/:id/online-status ───────────────────────────────────────
+router.put("/:id/online-status", protect, allow("doctor", "admin"), async (req, res) => {
+  try {
+    if (String(req.user._id) !== req.params.id && req.user.role !== "admin") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    const { isOnline } = req.body;
+    const updated = await User.findByIdAndUpdate(
+      req.params.id,
+      { $set: { isOnline: !!isOnline } },
+      { new: true }
+    ).select("name isOnline").lean();
+
+    if (!updated) return res.status(404).json({ error: "Doctor not found" });
+    res.json({ success: true, isOnline: updated.isOnline });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
+
+/*
+═══════════════════════════════════════════════════════════════════
+  ADD THESE FIELDS TO YOUR User.js / Doctor.js MONGOOSE SCHEMA
+═══════════════════════════════════════════════════════════════════
+
+  Inside your existing schema definition, add:
+
+    location: {
+      lat:     { type: Number, default: null },
+      lng:     { type: Number, default: null },
+      address: { type: String, default: ""   },
+    },
+    isOnline: { type: Boolean, default: true },
+
+  That's it — Mongoose will automatically create these fields.
+═══════════════════════════════════════════════════════════════════
+*/

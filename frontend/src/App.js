@@ -11,6 +11,7 @@ import MedicalReportAnalyzer from "./pages/MedicalReportAnalyzer";
 import { useState, useEffect, useCallback } from "react";
 import { connectWallet, shortAddress } from "./hooks/useBlockchain";
 import "./App.css";
+import "leaflet/dist/leaflet.css";
 
 const API = process.env.REACT_APP_API_URL || "http://localhost:5000/api";
 

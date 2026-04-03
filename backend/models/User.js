@@ -29,18 +29,22 @@ const userSchema = new mongoose.Schema({
   walletAddress:   { type: String, default: '' },
   isActive:        { type: Boolean, default: true },
   lastLogin:       { type: Date },
+
+  // ── NEW: Clinic location for Nearby Doctors map ───────────────────────────
+  location: {
+    lat:     { type: Number, default: null },
+    lng:     { type: Number, default: null },
+    address: { type: String, default: '' },
+  },
+
+  // ── NEW: Whether doctor is currently online/accepting patients ────────────
+  isOnline: { type: Boolean, default: true },
+
 }, { timestamps: true });
 
 userSchema.index({ role: 1, isActive: 1 });
 userSchema.index({ specialty: 1, isActive: 1 });
 userSchema.index({ name: 'text', specialty: 'text', hospital: 'text' });
-
-// FIX: sparse only — do NOT add unique: true here.
-// Doctors and admins never get a patientId, so their patientId field is
-// undefined. MongoDB treats multiple undefined values as duplicates when
-// unique: true is set, causing "E11000 duplicate key" on the second doctor
-// you register. sparse: true already excludes null/undefined documents from
-// the index, which is all we need.
 userSchema.index({ patientId: 1 }, { sparse: true });
 
 userSchema.pre('save', async function () {

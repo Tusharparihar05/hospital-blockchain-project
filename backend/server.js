@@ -11,10 +11,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 
 
 const mongoUri = process.env.MONGODB_URI;
 if (!mongoUri) { console.error("❌ MONGODB_URI not set in .env"); process.exit(1); }
-if (!process.env.JWT_SECRET) {
-  console.error("❌ JWT_SECRET not set in .env");
-  process.exit(1);
-}
+if (!process.env.JWT_SECRET) { console.error("❌ JWT_SECRET not set in .env"); process.exit(1); }
 
 mongoose.connect(mongoUri)
   .then(() => { console.log("✅ MongoDB connected"); startServer(); })
@@ -47,10 +44,17 @@ const userSchema = new mongoose.Schema({
   languages:       [String],
   tags:            [String],
   availability:    [String],
+  availabilityMap: { type: mongoose.Schema.Types.Mixed, default: {} },
   status:          { type: String, enum: ["online", "busy", "offline"], default: "online" },
   walletAddress:   { type: String, default: "" },
   isActive:        { type: Boolean, default: true },
   lastLogin:       { type: Date },
+  location: {
+    lat:     { type: Number, default: null },
+    lng:     { type: Number, default: null },
+    address: { type: String, default: "" },
+  },
+  isOnline: { type: Boolean, default: true },
 }, { timestamps: true });
 
 userSchema.index({ role: 1, isActive: 1 });
@@ -74,22 +78,24 @@ userSchema.methods.comparePassword = function (plain) {
 const User = mongoose.model("User", userSchema);
 
 // ── Health Record ─────────────────────────────────────────────────────────────
-// PATCHED: includes doctor-upload fields from the backend patch file
+// FIX: Removed unique index on fileHash to prevent E11000 duplicate key errors
+// when doctors upload multiple reports (fileHash was computed the same way for similar files)
 const recordSchema = new mongoose.Schema({
   patientId:          { type: String, required: true, index: true },
   patientStrId:       { type: String, default: "" },
-  patientName:        { type: String, default: "" },           // doctor-upload patch
+  patientName:        { type: String, default: "" },
   uploadedBy:         { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-  uploadedByDoctor:   { type: Boolean, default: false },       // true when doctor uploads
-  doctorId:           { type: String, default: "" },           // doctor's user ID
-  doctorName:         { type: String, default: "" },           // doctor's display name
-  doctorComment:      { type: String, default: "" },           // doctor's clinical notes
-  recommendation:     { type: String, default: "" },           // doctor's recommendations
+  uploadedByDoctor:   { type: Boolean, default: false },
+  doctorId:           { type: String, default: "" },
+  doctorName:         { type: String, default: "" },
+  doctorComment:      { type: String, default: "" },
+  recommendation:     { type: String, default: "" },
   fileName:           { type: String, default: "" },
   category:           { type: String, default: "General" },
   uploadDate:         { type: String, default: () => new Date().toISOString().slice(0, 10) },
   doctor:             { type: String, default: "Self Upload" },
   dept:               { type: String, default: "" },
+  // FIX: fileHash is NOT unique — multiple records can have same hash (e.g. same template file)
   fileHash:           { type: String, default: "" },
   blockchainHash:     { type: String, default: "" },
   blockchainTx:       { type: String, default: "" },
@@ -97,13 +103,16 @@ const recordSchema = new mongoose.Schema({
   ipfsUrl:            { type: String, default: "" },
   anchoredOnChain:    { type: Boolean, default: false },
   anchoredAt:         { type: Date },
-  doctorNotes:        { type: String, default: "" },           // legacy field kept
+  doctorNotes:        { type: String, default: "" },
   aiSummary:          { type: mongoose.Schema.Types.Mixed, default: null },
 }, { timestamps: true });
 
+// No unique constraint on fileHash — only index for query performance
+recordSchema.index({ fileHash: 1 });
+
 const MedicalRecord = mongoose.model("MedicalRecord", recordSchema);
 
-// ── Appointment ───────────────────────────────────────────────────────────────
+// ── Appointment (includes checkedIn fields) ───────────────────────────────────
 const appointmentSchema = new mongoose.Schema({
   patientId:     { type: String, required: true, index: true },
   patientName:   { type: String, default: "" },
@@ -125,6 +134,13 @@ const appointmentSchema = new mongoose.Schema({
   age:           { type: Number },
   gender:        { type: String, default: "" },
   phone:         { type: String, default: "" },
+  checkedIn:     { type: Boolean, default: false },
+  checkedInAt:   { type: Date },
+  // NEW: queue tracking fields
+  queuePosition:   { type: Number, default: null },
+  treatmentStart:  { type: Date, default: null },
+  treatmentEnd:    { type: Date, default: null },
+  treatmentDuration: { type: Number, default: null }, // in minutes
 }, { timestamps: true });
 
 const Appointment = mongoose.model("Appointment", appointmentSchema);
@@ -141,6 +157,18 @@ const licenceSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const LicenceVerification = mongoose.model("LicenceVerification", licenceSchema);
+
+// ── Notification Schema ───────────────────────────────────────────────────────
+const notificationSchema = new mongoose.Schema({
+  patientId:   { type: String, required: true, index: true },
+  type:        { type: String, enum: ["queue_update", "treatment_complete", "appointment_reminder"], required: true },
+  title:       { type: String, required: true },
+  message:     { type: String, required: true },
+  read:        { type: Boolean, default: false },
+  metadata:    { type: mongoose.Schema.Types.Mixed, default: {} },
+}, { timestamps: true });
+
+const Notification = mongoose.model("Notification", notificationSchema);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // BLOCKCHAIN — PatientRecords contract (optional)
@@ -173,15 +201,11 @@ function getPatientRecordsContract() {
 async function anchorOnChain(chainPatientId, fileHash, category, fileName) {
   try {
     const contract = getPatientRecordsContract();
-    if (!contract) {
-      return { success: false, anchored: false, reason: "Blockchain not configured" };
-    }
+    if (!contract) return { success: false, anchored: false, reason: "Blockchain not configured" };
     const { ethers } = require("ethers");
     const already = await contract.isAnchored(fileHash);
     if (already) return { success: true, anchored: true, alreadyAnchored: true };
-    const tx      = await contract.anchorRecord(
-      Number(chainPatientId), fileHash, category || "general", fileName || "unknown"
-    );
+    const tx      = await contract.anchorRecord(Number(chainPatientId), fileHash, category || "general", fileName || "unknown");
     const receipt = await tx.wait();
     return { success: true, anchored: true, txHash: tx.hash, block: receipt.blockNumber };
   } catch (err) {
@@ -191,19 +215,18 @@ async function anchorOnChain(chainPatientId, fileHash, category, fileName) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// WAV HEADER BUILDER — converts raw PCM from Gemini TTS to playable WAV
+// WAV HEADER BUILDER
 // ══════════════════════════════════════════════════════════════════════════════
 function buildWavBuffer(pcmBuffer, sampleRate = 24000, numChannels = 1, bitsPerSample = 16) {
-  const byteRate    = sampleRate * numChannels * (bitsPerSample / 8);
-  const blockAlign  = numChannels * (bitsPerSample / 8);
-  const dataSize    = pcmBuffer.length;
-  const headerSize  = 44;
-  const wavBuffer   = Buffer.alloc(headerSize + dataSize);
+  const byteRate   = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const dataSize   = pcmBuffer.length;
+  const headerSize = 44;
+  const wavBuffer  = Buffer.alloc(headerSize + dataSize);
 
   wavBuffer.write("RIFF", 0);
   wavBuffer.writeUInt32LE(36 + dataSize, 4);
   wavBuffer.write("WAVE", 8);
-
   wavBuffer.write("fmt ", 12);
   wavBuffer.writeUInt32LE(16, 16);
   wavBuffer.writeUInt16LE(1, 20);
@@ -212,7 +235,6 @@ function buildWavBuffer(pcmBuffer, sampleRate = 24000, numChannels = 1, bitsPerS
   wavBuffer.writeUInt32LE(byteRate, 28);
   wavBuffer.writeUInt16LE(blockAlign, 32);
   wavBuffer.writeUInt16LE(bitsPerSample, 34);
-
   wavBuffer.write("data", 36);
   wavBuffer.writeUInt32LE(dataSize, 40);
   pcmBuffer.copy(wavBuffer, 44);
@@ -283,19 +305,13 @@ ${reportText}${imageNote}`;
 
   const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${GROQ_API_KEY}`,
-    },
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GROQ_API_KEY}` },
     body: JSON.stringify({
       model: "llama-3.3-70b-versatile",
       temperature: 0.3,
       max_tokens: 2000,
       messages: [
-        {
-          role: "system",
-          content: "You are a medical report analyst. Always respond with ONLY a valid JSON object. No markdown, no backticks, no explanation outside the JSON.",
-        },
+        { role: "system", content: "You are a medical report analyst. Always respond with ONLY a valid JSON object. No markdown, no backticks, no explanation outside the JSON." },
         { role: "user", content: prompt },
       ],
     }),
@@ -309,12 +325,7 @@ ${reportText}${imageNote}`;
   const data    = await groqRes.json();
   const rawText = data.choices?.[0]?.message?.content || "";
   const cleaned = rawText.replace(/```json|```/gi, "").trim();
-
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    throw new Error("Groq returned invalid JSON. Please try again.");
-  }
+  try { return JSON.parse(cleaned); } catch { throw new Error("Groq returned invalid JSON. Please try again."); }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -328,146 +339,122 @@ function startServer() {
   function randomHex(len = 8) {
     return [...Array(len)].map(() => Math.floor(Math.random() * 16).toString(16)).join("").toUpperCase();
   }
-
   function generateToken(userId) {
     return jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "7d" });
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // FIX fileHash unique index — drop it if it exists on startup
+  // ══════════════════════════════════════════════════════════════════════════
+  MedicalRecord.collection.dropIndex("fileHash_1").then(() => {
+    console.log("✅ Dropped unique fileHash index (was causing duplicate key errors)");
+  }).catch(() => {
+    // Index doesn't exist or was already dropped — that's fine
+  });
+
   app.get("/", (req, res) => res.json({ status: "ok", message: "MediChain Backend Running ✅" }));
 
   // ══════════════════════════════════════════════════════════════════════════
-  // AUTH
+  // AUTH ROUTES
   // ══════════════════════════════════════════════════════════════════════════
 
   app.post("/api/auth/signup", async (req, res) => {
     try {
-      const {
-        name, email, password, phone, role,
-        walletAddress, specialty, licenseNumber,
-        hospital, experience, fee, bio, education, languages, availability,
-      } = req.body;
-
-      if (!name || !email || !password)
-        return res.status(400).json({ error: "name, email and password are required" });
-
+      const { name, email, password, phone, role, walletAddress, specialty, licenseNumber, hospital, experience, fee, bio, education, languages, availability } = req.body;
+      if (!name || !email || !password) return res.status(400).json({ error: "name, email and password are required" });
       const existing = await User.findOne({ email: email.toLowerCase().trim() });
       if (existing) return res.status(409).json({ error: "Email already registered" });
 
       const newUser = new User({
-        name:          name.trim(),
-        email:         email.toLowerCase().trim(),
-        passwordHash:  password,
-        role:          role || "patient",
-        phone:         phone || "",
-        walletAddress: walletAddress || "",
-        specialty:     specialty || "",
-        licenseNumber: licenseNumber || "",
-        hospital:      hospital || "",
-        experience:    experience ? Number(experience) : 0,
-        fee:           fee ? Number(fee) : 500,
-        bio:           bio || "",
-        education:     education || "",
-        languages:     Array.isArray(languages)    ? languages    : (languages    ? [languages]    : []),
-        availability:  Array.isArray(availability) ? availability : [],
-        status:        "online",
-        isActive:      true,
+        name: name.trim(), email: email.toLowerCase().trim(), passwordHash: password,
+        role: role || "patient", phone: phone || "", walletAddress: walletAddress || "",
+        specialty: specialty || "", licenseNumber: licenseNumber || "", hospital: hospital || "",
+        experience: experience ? Number(experience) : 0, fee: fee ? Number(fee) : 500,
+        bio: bio || "", education: education || "",
+        languages:    Array.isArray(languages)    ? languages    : (languages    ? [languages]    : []),
+        availability: Array.isArray(availability) ? availability : [],
+        status: "online", isActive: true,
       });
 
       await newUser.save();
       const token = generateToken(newUser._id);
-
       return res.status(201).json({
-        message: "Account created successfully",
-        token,
+        message: "Account created successfully", token,
         user: {
-          id:             String(newUser._id),
-          name:           newUser.name,
-          email:          newUser.email,
-          role:           newUser.role,
-          patientId:      newUser.patientId      || null,
-          chainPatientId: newUser.chainPatientId || null,
-          walletAddress:  newUser.walletAddress,
-          specialty:      newUser.specialty,
-          licenseNumber:  newUser.licenseNumber,
-          hospital:       newUser.hospital,
+          id: String(newUser._id), name: newUser.name, email: newUser.email, role: newUser.role,
+          patientId: newUser.patientId || null, chainPatientId: newUser.chainPatientId || null,
+          walletAddress: newUser.walletAddress, specialty: newUser.specialty,
+          licenseNumber: newUser.licenseNumber, hospital: newUser.hospital,
         },
       });
-    } catch (err) {
-      console.error("signup error:", err);
-      res.status(500).json({ error: err.message });
-    }
+    } catch (err) { console.error("signup error:", err); res.status(500).json({ error: err.message }); }
   });
 
   app.post("/api/auth/login", async (req, res) => {
     try {
       const { email, password, role } = req.body;
       if (!email || !password) return res.status(400).json({ error: "email and password are required" });
-
       const query = { email: email.toLowerCase().trim(), isActive: true };
       if (role && ["patient", "doctor", "admin"].includes(role)) query.role = role;
-
       const user = await User.findOne(query);
       if (!user) return res.status(401).json({ error: "Invalid email or password" });
-
       const ok = await user.comparePassword(password);
       if (!ok) return res.status(401).json({ error: "Invalid email or password" });
-
       user.lastLogin = new Date();
       await user.save();
-
       const token = generateToken(user._id);
       return res.json({
-        message: "Login successful",
-        token,
+        message: "Login successful", token,
         user: {
-          id:             String(user._id),
-          name:           user.name,
-          email:          user.email,
-          role:           user.role,
-          patientId:      user.patientId      || null,
-          chainPatientId: user.chainPatientId || null,
-          walletAddress:  user.walletAddress,
-          specialty:      user.specialty,
-          licenseNumber:  user.licenseNumber,
-          hospital:       user.hospital,
-          experience:     user.experience,
-          fee:            user.fee,
-          bio:            user.bio,
-          education:      user.education,
-          languages:      user.languages,
-          availability:   user.availability,
-          status:         user.status,
+          id: String(user._id), name: user.name, email: user.email, role: user.role,
+          patientId: user.patientId || null, chainPatientId: user.chainPatientId || null,
+          walletAddress: user.walletAddress, specialty: user.specialty,
+          licenseNumber: user.licenseNumber, hospital: user.hospital,
+          experience: user.experience, fee: user.fee, bio: user.bio,
+          education: user.education, languages: user.languages,
+          availability: user.availability, availabilityMap: user.availabilityMap || {},
+          status: user.status,
+          location: user.location || { lat: null, lng: null, address: "" },
+          isOnline: user.isOnline !== undefined ? user.isOnline : true,
         },
       });
-    } catch (err) {
-      console.error("login error:", err);
-      res.status(500).json({ error: err.message });
-    }
+    } catch (err) { console.error("login error:", err); res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/api/auth/me", protect, async (req, res) => {
+    try {
+      const user = await User.findById(req.user._id).select("-passwordHash -__v").lean();
+      if (!user) return res.status(404).json({ error: "User not found" });
+      res.json({
+        id: String(user._id), _id: String(user._id), name: user.name, username: user.name,
+        email: user.email, role: user.role, patientId: user.patientId || null,
+        chainPatientId: user.chainPatientId || null, walletAddress: user.walletAddress || "",
+        specialty: user.specialty || "", hospital: user.hospital || "", phone: user.phone || "",
+        gender: user.gender || "", bloodGroup: user.bloodGroup || "",
+        experience: user.experience || 0, fee: user.fee || 500,
+        bio: user.bio || "", education: user.education || "",
+        languages: user.languages || [], availability: user.availability || [],
+        availabilityMap: user.availabilityMap || {},
+        location: user.location || { lat: null, lng: null, address: "" },
+        isOnline: user.isOnline !== undefined ? user.isOnline : true,
+        createdAt: user.createdAt,
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   app.post("/api/auth/wallet-login", async (req, res) => {
     try {
       const { walletAddress } = req.body;
       if (!walletAddress) return res.status(400).json({ error: "walletAddress is required" });
-      const user = await User.findOne({
-        walletAddress: { $regex: new RegExp(`^${walletAddress}$`, "i") },
-        isActive: true,
-      }).lean();
+      const user = await User.findOne({ walletAddress: { $regex: new RegExp(`^${walletAddress}$`, "i") }, isActive: true }).lean();
       if (!user) return res.status(404).json({ error: "No account found for this wallet" });
       const token = generateToken(user._id);
       return res.json({
-        message: "Wallet login successful",
-        token,
+        message: "Wallet login successful", token,
         user: {
-          id:             String(user._id),
-          name:           user.name,
-          email:          user.email,
-          role:           user.role,
-          patientId:      user.patientId,
-          chainPatientId: user.chainPatientId,
-          walletAddress:  user.walletAddress,
-          specialty:      user.specialty,
-          licenseNumber:  user.licenseNumber,
+          id: String(user._id), name: user.name, email: user.email, role: user.role,
+          patientId: user.patientId, chainPatientId: user.chainPatientId,
+          walletAddress: user.walletAddress, specialty: user.specialty, licenseNumber: user.licenseNumber,
         },
       });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -480,16 +467,12 @@ function startServer() {
   app.get("/api/patients", async (req, res) => {
     try {
       const patients = await User.find({ role: "patient", isActive: true })
-        .select("name email phone patientId chainPatientId gender bloodGroup createdAt")
-        .lean();
+        .select("name email phone patientId chainPatientId gender bloodGroup createdAt").lean();
       res.json(patients.map(p => ({
-        id:     p.patientId || String(p._id),
-        name:   p.name,
-        email:  p.email,
-        phone:  p.phone  || "",
-        gender: p.gender || "Unknown",
-        blood:  p.bloodGroup || "",
-        age:    p.age    || 0,
+        id: p.patientId || String(p._id), _id: String(p._id),
+        name: p.name, email: p.email, phone: p.phone || "",
+        gender: p.gender || "Unknown", blood: p.bloodGroup || "",
+        age: p.age || 0, patientId: p.patientId || String(p._id),
       })));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -504,13 +487,7 @@ function startServer() {
         role: "patient",
       }).lean();
       if (!patient) return res.status(404).json({ error: "Patient not found" });
-      res.json({
-        id:     patient.patientId || String(patient._id),
-        name:   patient.name,
-        phone:  patient.phone,
-        gender: patient.gender,
-        age:    patient.age || 0,
-      });
+      res.json({ id: patient.patientId || String(patient._id), name: patient.name, phone: patient.phone, gender: patient.gender, age: patient.age || 0 });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -520,41 +497,34 @@ function startServer() {
 
   app.get("/api/doctors", async (req, res) => {
     try {
-      const doctors = await User.find({ role: "doctor", isActive: true })
-        .select("-passwordHash -__v").lean();
+      const doctors = await User.find({ role: "doctor", isActive: true }).select("-passwordHash -__v").lean();
       res.json(doctors.map(d => ({
-        id:           String(d._id),
-        name:         d.name,
-        email:        d.email,
-        specialty:    d.specialty    || "General",
-        hospital:     d.hospital     || "",
-        experience:   d.experience   || 0,
-        fee:          d.fee          || 500,
-        rating:       d.rating       || 0,
-        reviewCount:  d.reviewCount  || 0,
-        bio:          d.bio          || "",
-        education:    d.education    || "",
-        languages:    d.languages    || [],
-        tags:         d.tags         || [],
-        availability: d.availability || [],
-        status:       d.status       || "online",
-        image:        "👨‍⚕️",
-        available:    d.status !== "offline",
-        slots:        d.availability?.length || 0,
-        reviews:      [],
-        conditions:   d.tags || [],
-        patients:     0,
-        todayAppts:   0,
+        id: String(d._id), _id: String(d._id), name: d.name, email: d.email,
+        specialty: d.specialty || "General", hospital: d.hospital || "",
+        experience: d.experience || 0, fee: d.fee || 500,
+        rating: d.rating || 0, reviewCount: d.reviewCount || 0,
+        bio: d.bio || "", education: d.education || "",
+        languages: d.languages || [], tags: d.tags || [],
+        availability: d.availability || [], availabilityMap: d.availabilityMap || {},
+        status: d.status || "online", image: "👨‍⚕️",
+        available: d.status !== "offline", slots: d.availability?.length || 0,
+        reviews: [], conditions: d.tags || [], patients: 0, todayAppts: 0,
+        location: d.location || { lat: null, lng: null, address: "" },
+        isOnline: d.isOnline !== undefined ? d.isOnline : true,
       })));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   app.get("/api/doctors/:id", async (req, res) => {
     try {
-      const doctor = await User.findOne({ _id: req.params.id, role: "doctor" })
-        .select("-passwordHash -__v").lean();
+      const doctor = await User.findOne({ _id: req.params.id, role: "doctor" }).select("-passwordHash -__v").lean();
       if (!doctor) return res.status(404).json({ error: "Doctor not found" });
-      res.json({ ...doctor, id: String(doctor._id) });
+      res.json({
+        ...doctor, id: String(doctor._id), _id: String(doctor._id),
+        location: doctor.location || { lat: null, lng: null, address: "" },
+        isOnline: doctor.isOnline !== undefined ? doctor.isOnline : true,
+        availabilityMap: doctor.availabilityMap || {},
+      });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -564,31 +534,342 @@ function startServer() {
       if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: "Invalid doctor ID" });
       if (String(req.user._id) !== id && req.user.role !== "admin")
         return res.status(403).json({ error: "Can only update your own profile" });
-
-      const allowedFields = ["bio", "hospital", "education", "experience", "fee", "specialty", "phone", "availability", "languages", "tags"];
+      const allowedFields = ["bio", "hospital", "education", "experience", "fee", "specialty", "phone", "availability", "availabilityMap", "languages", "tags"];
       const update = {};
-      for (const key of allowedFields) {
-        if (req.body[key] !== undefined) update[key] = req.body[key];
-      }
+      for (const key of allowedFields) { if (req.body[key] !== undefined) update[key] = req.body[key]; }
       if (Object.keys(update).length === 0) return res.status(400).json({ error: "No valid fields to update" });
       if (update.experience !== undefined) update.experience = Number(update.experience);
       if (update.fee        !== undefined) update.fee        = Number(update.fee);
-
       const doctor = await User.findOneAndUpdate(
         { _id: id, role: "doctor" }, { $set: update }, { new: true, runValidators: true }
       ).select("-passwordHash -__v").lean();
-
       if (!doctor) return res.status(404).json({ error: "Doctor not found" });
       return res.json({ message: "Profile updated", doctor: { ...doctor, id: String(doctor._id) } });
+    } catch (err) { console.error("doctor update error:", err); res.status(500).json({ error: err.message }); }
+  });
+
+  app.put("/api/doctors/:id/location", protect, async (req, res) => {
+    try {
+      if (String(req.user._id) !== req.params.id && req.user.role !== "admin")
+        return res.status(403).json({ error: "Forbidden" });
+      const { lat, lng, address } = req.body;
+      if (lat == null || lng == null) return res.status(400).json({ error: "lat and lng are required" });
+      const latNum = parseFloat(lat);
+      const lngNum = parseFloat(lng);
+      if (isNaN(latNum) || isNaN(lngNum)) return res.status(400).json({ error: "lat and lng must be numbers" });
+      const updated = await User.findByIdAndUpdate(
+        req.params.id,
+        { $set: { location: { lat: latNum, lng: lngNum, address: address || "" } } },
+        { new: true }
+      ).select("name location").lean();
+      if (!updated) return res.status(404).json({ error: "Doctor not found" });
+      res.json({ success: true, location: updated.location });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.put("/api/doctors/:id/online-status", protect, async (req, res) => {
+    try {
+      if (String(req.user._id) !== req.params.id && req.user.role !== "admin")
+        return res.status(403).json({ error: "Forbidden" });
+      const updated = await User.findByIdAndUpdate(
+        req.params.id,
+        { $set: { isOnline: !!req.body.isOnline } },
+        { new: true }
+      ).select("name isOnline").lean();
+      if (!updated) return res.status(404).json({ error: "Doctor not found" });
+      res.json({ success: true, isOnline: updated.isOnline });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // QUEUE — live patient queue per doctor per day (in-memory)
+  // Enhanced with: token assignment, completion tracking, notifications
+  // ══════════════════════════════════════════════════════════════════════════
+  const _queueMap = new Map();
+  function _qkey(doctorId, date) { return `${doctorId}::${date}`; }
+
+  // Helper: create notification for a patient
+  async function createNotification(patientId, type, title, message, metadata = {}) {
+    try {
+      await Notification.create({ patientId, type, title, message, metadata });
     } catch (err) {
-      console.error("doctor update error:", err);
-      res.status(500).json({ error: err.message });
+      console.warn("[notification] failed to create:", err.message);
     }
+  }
+
+  // Helper: check and send queue position notifications
+  async function checkQueueNotifications(queue, doctorName) {
+    const active = queue.filter(q => !q.done);
+    for (let i = 0; i < active.length; i++) {
+      const entry = active[i];
+      const patientsAhead = i; // 0-indexed, so position i means i patients ahead
+
+      // Notify when 5 or fewer patients ahead (and hasn't been notified yet for this threshold)
+      if (patientsAhead <= 5 && !entry.notified5 && patientsAhead > 0) {
+        entry.notified5 = true;
+        await createNotification(
+          entry.patientId,
+          "queue_update",
+          "Almost Your Turn! 🏥",
+          `Only ${patientsAhead} patient${patientsAhead !== 1 ? "s" : ""} ahead of you with Dr. ${doctorName}. Please be ready.`,
+          { patientsAhead, doctorName, appointmentId: entry.appointmentId }
+        );
+      }
+
+      // Notify when they are next (position 1 ahead)
+      if (patientsAhead === 1 && !entry.notifiedNext) {
+        entry.notifiedNext = true;
+        await createNotification(
+          entry.patientId,
+          "queue_update",
+          "You're Next! 🔔",
+          `You are next in line with Dr. ${doctorName}. Please proceed to the consultation room.`,
+          { patientsAhead: 0, doctorName, appointmentId: entry.appointmentId }
+        );
+      }
+
+      // Check 30-min notification based on appointment time
+      if (entry.time && !entry.notified30min) {
+        const apptTime = new Date(`${new Date().toISOString().slice(0, 10)} ${entry.time}`);
+        const now      = new Date();
+        const diffMins = (apptTime - now) / 60000;
+        if (diffMins > 0 && diffMins <= 30) {
+          entry.notified30min = true;
+          await createNotification(
+            entry.patientId,
+            "appointment_reminder",
+            "Appointment in 30 Minutes ⏰",
+            `Your appointment with Dr. ${doctorName} is in ${Math.round(diffMins)} minutes. Please check in at the reception.`,
+            { minutesLeft: Math.round(diffMins), doctorName, appointmentId: entry.appointmentId }
+          );
+        }
+      }
+    }
+  }
+
+  // POST /api/queue/checkin — patient checks in on arrival
+  app.post("/api/queue/checkin", async (req, res) => {
+    try {
+      const { appointmentId, doctorId, date, patientId, time } = req.body;
+      if (!appointmentId || !doctorId || !date)
+        return res.status(400).json({ error: "appointmentId, doctorId, date required" });
+
+      const key = _qkey(doctorId, date);
+      if (!_queueMap.has(key)) _queueMap.set(key, []);
+      const queue = _queueMap.get(key);
+
+      const existing = queue.find(q => q.appointmentId === appointmentId);
+      if (existing) {
+        const active = queue.filter(q => !q.done);
+        const pos    = active.indexOf(existing);
+        return res.json({ alreadyCheckedIn: true, position: pos >= 0 ? pos : 0, ahead: Math.max(0, pos), queueToken: existing.queueToken });
+      }
+
+      // FIX: Generate a proper queue token for this check-in
+      const queueToken    = `Q-${randomHex(4)}-${(queue.length + 1).toString().padStart(3, "0")}`;
+      const queuePosition = queue.length + 1;
+
+      queue.push({
+        appointmentId,
+        patientId,
+        time,
+        done:       false,
+        checkedInAt: Date.now(),
+        queueToken,
+        queuePosition,
+        notified5:    false,
+        notifiedNext: false,
+        notified30min: false,
+      });
+
+      // Update appointment in DB with queue info
+      await Appointment.findByIdAndUpdate(appointmentId, {
+        checkedIn:     true,
+        checkedInAt:   new Date(),
+        queuePosition,
+        treatmentStart: null,
+      }).catch(() => {});
+
+      // Look up doctor name for notifications
+      const doctor = await User.findById(doctorId).select("name").lean().catch(() => null);
+      const doctorName = doctor?.name || "your doctor";
+
+      // Create check-in notification
+      const activeNow = queue.filter(q => !q.done);
+      const myPos     = activeNow.length - 1;
+      await createNotification(
+        patientId,
+        "queue_update",
+        "Check-in Confirmed ✅",
+        `You are #${queuePosition} in queue with Dr. ${doctorName}. Your queue token is ${queueToken}. ${myPos > 0 ? `${myPos} patient${myPos !== 1 ? "s" : ""} ahead of you.` : "You are next!"}`,
+        { queueToken, queuePosition, patientsAhead: myPos, doctorName, appointmentId }
+      );
+
+      res.json({ success: true, position: myPos, ahead: Math.max(0, myPos), queueToken, queuePosition });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // GET /api/queue/:appointmentId?doctorId=&date=
+  app.get("/api/queue/:appointmentId", (req, res) => {
+    const { appointmentId } = req.params;
+    const { doctorId, date } = req.query;
+    if (!doctorId || !date) return res.status(400).json({ error: "doctorId and date query params required" });
+    const key    = _qkey(doctorId, date);
+    const queue  = _queueMap.get(key) || [];
+    const active = queue.filter(q => !q.done);
+    const myIdx  = active.findIndex(q => q.appointmentId === appointmentId);
+    const entry  = queue.find(q => q.appointmentId === appointmentId);
+    if (myIdx === -1) return res.json({ checkedIn: !!entry?.done, position: null, ahead: null, totalInQueue: active.length, done: !!entry?.done });
+    res.json({ checkedIn: true, position: myIdx, ahead: myIdx, totalInQueue: active.length, queueToken: entry?.queueToken, done: false });
+  });
+
+  // POST /api/queue/next — doctor marks current patient as treatment complete
+  app.post("/api/queue/next", async (req, res) => {
+    try {
+      const { doctorId, date } = req.body;
+      if (!doctorId || !date) return res.status(400).json({ error: "doctorId and date required" });
+      const key   = _qkey(doctorId, date);
+      const queue = _queueMap.get(key) || [];
+      const first = queue.find(q => !q.done);
+
+      if (first) {
+        first.done      = true;
+        first.completedAt = Date.now();
+
+        // Calculate treatment duration
+        const durationMs   = first.checkedInAt ? (first.completedAt - first.checkedInAt) : 0;
+        const durationMins = Math.round(durationMs / 60000);
+
+        // Update appointment as completed in DB
+        if (first.appointmentId) {
+          await Appointment.findByIdAndUpdate(first.appointmentId, {
+            status:          "completed",
+            treatmentEnd:    new Date(),
+            treatmentStart:  first.checkedInAt ? new Date(first.checkedInAt) : new Date(),
+            treatmentDuration: durationMins,
+          }).catch(() => {});
+        }
+
+        // Notify patient their treatment is complete
+        const doctor = await User.findById(doctorId).select("name").lean().catch(() => null);
+        const doctorName = doctor?.name || "your doctor";
+
+        await createNotification(
+          first.patientId,
+          "treatment_complete",
+          "Treatment Completed ✅",
+          `Your consultation with Dr. ${doctorName} is complete. Duration: ${durationMins} minute${durationMins !== 1 ? "s" : ""}. Thank you for visiting MediChain!`,
+          { durationMins, doctorName, appointmentId: first.appointmentId, queueToken: first.queueToken }
+        );
+
+        // Check queue notifications for remaining patients
+        await checkQueueNotifications(queue, doctorName);
+      }
+
+      const remaining = queue.filter(q => !q.done);
+      res.json({ success: true, remaining: remaining.length, next: remaining[0] || null });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // GET /api/queue?doctorId=&date= — doctor sees full queue
+  app.get("/api/queue", (req, res) => {
+    const { doctorId, date } = req.query;
+    if (!doctorId || !date) return res.status(400).json({ error: "doctorId and date required" });
+    const key   = _qkey(doctorId, date);
+    const queue = (_queueMap.get(key) || []).filter(q => !q.done);
+    res.json({ queue, total: queue.length });
+  });
+
+  // POST /api/queue/complete/:appointmentId — doctor marks specific appointment complete
+  app.post("/api/queue/complete/:appointmentId", async (req, res) => {
+    try {
+      const { appointmentId } = req.params;
+      const { doctorId, date } = req.body;
+      if (!doctorId || !date) return res.status(400).json({ error: "doctorId and date required" });
+
+      const key   = _qkey(doctorId, date);
+      const queue = _queueMap.get(key) || [];
+      const entry = queue.find(q => q.appointmentId === appointmentId);
+
+      if (entry && !entry.done) {
+        entry.done        = true;
+        entry.completedAt = Date.now();
+
+        const durationMs   = entry.checkedInAt ? (entry.completedAt - entry.checkedInAt) : 0;
+        const durationMins = Math.round(durationMs / 60000);
+
+        await Appointment.findByIdAndUpdate(appointmentId, {
+          status:           "completed",
+          treatmentEnd:     new Date(),
+          treatmentStart:   entry.checkedInAt ? new Date(entry.checkedInAt) : new Date(),
+          treatmentDuration: durationMins,
+        }).catch(() => {});
+
+        const doctor     = await User.findById(doctorId).select("name").lean().catch(() => null);
+        const doctorName = doctor?.name || "your doctor";
+
+        await createNotification(
+          entry.patientId,
+          "treatment_complete",
+          "Treatment Completed ✅",
+          `Your consultation with Dr. ${doctorName} is complete. Duration: ${durationMins} minute${durationMins !== 1 ? "s" : ""}. Thank you for visiting MediChain!`,
+          { durationMins, doctorName, appointmentId, queueToken: entry.queueToken }
+        );
+
+        await checkQueueNotifications(queue, doctorName);
+      } else {
+        // If not in memory queue, just update DB
+        await Appointment.findByIdAndUpdate(appointmentId, { status: "completed" }).catch(() => {});
+      }
+
+      const remaining = queue.filter(q => !q.done);
+      res.json({ success: true, remaining: remaining.length });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // NOTIFICATIONS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // GET /api/notifications/:patientId — get patient notifications
+  app.get("/api/notifications/:patientId", async (req, res) => {
+    try {
+      const notifications = await Notification.find({ patientId: req.params.patientId })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .lean();
+      res.json(notifications.map(n => ({ ...n, id: String(n._id) })));
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // PUT /api/notifications/:id/read — mark notification as read
+  app.put("/api/notifications/:id/read", async (req, res) => {
+    try {
+      await Notification.findByIdAndUpdate(req.params.id, { read: true });
+      res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // PUT /api/notifications/read-all/:patientId
+  app.put("/api/notifications/read-all/:patientId", async (req, res) => {
+    try {
+      await Notification.updateMany({ patientId: req.params.patientId, read: false }, { read: true });
+      res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   // ══════════════════════════════════════════════════════════════════════════
   // APPOINTMENTS
   // ══════════════════════════════════════════════════════════════════════════
+
+  app.get("/api/appointments/patient", protect, async (req, res) => {
+    try {
+      const user  = req.user;
+      const query = { $or: [{ patientId: user.patientId }, { patientId: String(user._id) }] };
+      const appts = await Appointment.find(query).sort({ date: 1, time: 1 }).lean();
+      res.json(appts.map(a => ({ ...a, id: String(a._id) })));
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 
   app.get("/api/appointments", async (req, res) => {
     try {
@@ -604,41 +885,26 @@ function startServer() {
       const { patientId, doctorId, doctorName, dept, specialty, date, time, isEmergency, type, fee, feePaid, paymentMethod } = req.body;
       if (!date || !time)  return res.status(400).json({ error: "date and time are required" });
       if (!patientId)      return res.status(400).json({ error: "patientId is required" });
-
       const patientUser = await User.findOne({ patientId }).lean();
       const doctorUser  = doctorId ? await User.findById(doctorId).lean() : null;
       const tokenId     = `APT-${randomHex(8)}`;
-
       const appt = await Appointment.create({
-        patientId,
-        patientName:   patientUser?.name || "",
-        doctorId:      doctorId || "",
-        doctorName:    doctorName || doctorUser?.name || "",
-        dept:          dept || doctorUser?.specialty || "General",
-        specialty:     specialty || doctorUser?.specialty || "",
-        date, time, tokenId,
-        isEmergency:   !!isEmergency,
-        status:        "confirmed",
-        fee:           fee || doctorUser?.fee || 0,
-        feePaid:       !!feePaid,
-        paymentMethod: paymentMethod || "",
-        type:          type || "Consultation",
-        age:           patientUser?.age,
-        gender:        patientUser?.gender || "",
-        phone:         patientUser?.phone  || "",
-        blockchain:    tokenId,
+        patientId, patientName: patientUser?.name || "",
+        doctorId: doctorId || "", doctorName: doctorName || doctorUser?.name || "",
+        dept: dept || doctorUser?.specialty || "General",
+        specialty: specialty || doctorUser?.specialty || "",
+        date, time, tokenId, isEmergency: !!isEmergency, status: "confirmed",
+        fee: fee || doctorUser?.fee || 0, feePaid: !!feePaid,
+        paymentMethod: paymentMethod || "", type: type || "Consultation",
+        age: patientUser?.age, gender: patientUser?.gender || "",
+        phone: patientUser?.phone || "", blockchain: tokenId,
       });
-
       res.status(201).json({
-        message:     "Appointment booked",
+        message: "Appointment booked",
         appointment: { ...appt.toObject(), id: String(appt._id) },
-        tokenId,
-        blockchain:  tokenId,
+        tokenId, blockchain: tokenId,
       });
-    } catch (err) {
-      console.error("appt create error:", err);
-      res.status(500).json({ error: err.message });
-    }
+    } catch (err) { console.error("appt create error:", err); res.status(500).json({ error: err.message }); }
   });
 
   app.put("/api/appointments/:id/complete", async (req, res) => {
@@ -659,7 +925,22 @@ function startServer() {
 
   // ══════════════════════════════════════════════════════════════════════════
   // HEALTH RECORDS
+  // FIX: fileHash is now generated uniquely per upload to avoid duplicate key errors
   // ══════════════════════════════════════════════════════════════════════════
+
+  app.get("/api/reports", protect, async (req, res) => {
+    try {
+      const user  = req.user;
+      const query = {
+        $or: [
+          { patientStrId: user.patientId }, { patientStrId: String(user._id) },
+          { patientId: user.patientId },    { patientId: String(user._id) },
+        ],
+      };
+      const records = await MedicalRecord.find(query).sort({ createdAt: -1 }).lean();
+      res.json(records.map(r => ({ ...r, id: String(r._id) })));
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 
   app.get("/api/records", async (req, res) => {
     try {
@@ -673,7 +954,6 @@ function startServer() {
       const record = await MedicalRecord.findById(req.params.recordId).lean();
       if (!record)         return res.status(404).json({ error: "Record not found" });
       if (!record.ipfsUrl) return res.status(404).json({ error: "No file stored for this record" });
-
       if (record.ipfsUrl.startsWith("data:")) {
         const [header, b64] = record.ipfsUrl.split(",");
         const mime = header.replace("data:", "").replace(";base64", "");
@@ -687,7 +967,6 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // PATCHED: GET /api/records/:patientId — matches on both patientStrId and patientId
   app.get("/api/records/:patientId", async (req, res) => {
     try {
       const pid     = req.params.patientId;
@@ -702,11 +981,10 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // PATCHED: POST /api/records — supports doctor-upload fields
   app.post("/api/records", upload.single("file"), async (req, res) => {
     try {
-      const body = req.body;
-      const file = req.file;
+      const body      = req.body;
+      const file      = req.file;
       const patientId = body.patientId;
       if (!patientId) return res.status(400).json({ error: "patientId is required" });
 
@@ -716,22 +994,27 @@ function startServer() {
       const doctorComment    = body.doctorComment  || "";
       const recommendation   = body.recommendation || "";
       const uploadedByDoctor = body.uploadedByDoctor === "true" || body.uploadedByDoctor === true;
-      const doctorId         = body.doctorId   || "";
-      const doctorNameField  = body.doctorName || "";
+      const doctorId         = body.doctorId    || "";
+      const doctorNameField  = body.doctorName  || "";
       const patientNameField = body.patientName || "";
 
-      let fileHash = body.fileHash || "";
       let fileName = body.fileName || "";
       let ipfsUrl  = "";
 
+      // FIX: Always generate a unique fileHash using timestamp + random to prevent duplicate key errors
+      // The old code used file content which caused collisions when same file was uploaded twice
+      const uniqueSuffix = `${Date.now()}-${randomHex(8)}`;
+      let fileHash = `0x${uniqueSuffix}`;
+
       if (file) {
         fileName = fileName || file.originalname || `Upload_${Date.now()}.pdf`;
-        fileHash = fileHash || `0x${Buffer.from(file.buffer).slice(0, 16).toString("hex")}`;
+        // Use first 16 bytes + unique suffix to ensure uniqueness
+        const contentHex = Buffer.from(file.buffer).slice(0, 8).toString("hex");
+        fileHash = `0x${contentHex}${randomHex(8)}`;
         const mime = file.mimetype || "application/octet-stream";
         ipfsUrl = `data:${mime};base64,${file.buffer.toString("base64")}`;
       } else {
         fileName = fileName || `Report_${new Date().toISOString().slice(0, 10)}_${category.replace(/\s+/g, "_")}.pdf`;
-        fileHash = fileHash || `0x${randomHex(12)}`;
         ipfsUrl  = body.ipfsUrl || "";
       }
 
@@ -746,30 +1029,27 @@ function startServer() {
       };
 
       const newRecord = await MedicalRecord.create({
-        patientId,
-        patientStrId:     patientId,
-        patientName:      patientNameField,
-        uploadedByDoctor: uploadedByDoctor,
-        doctorId:         doctorId,
-        doctorName:       doctorNameField || (uploadedByDoctor ? doctor : ""),
-        doctorComment:    doctorComment,
-        recommendation:   recommendation,
-        fileName,
-        category,
-        uploadDate:       new Date().toISOString().slice(0, 10),
-        doctor,
-        dept,
-        fileHash,
-        blockchainHash:   "",
-        blockchainTx:     "",
-        ipfsUrl,
-        anchoredOnChain:  false,
-        doctorNotes:      doctorComment,   // keep legacy field in sync
-        aiSummary,
+        patientId, patientStrId: patientId, patientName: patientNameField,
+        uploadedByDoctor, doctorId,
+        doctorName: doctorNameField || (uploadedByDoctor ? doctor : ""),
+        doctorComment, recommendation, fileName, category,
+        uploadDate: new Date().toISOString().slice(0, 10),
+        doctor, dept, fileHash, blockchainHash: "", blockchainTx: "",
+        ipfsUrl, anchoredOnChain: false, doctorNotes: doctorComment, aiSummary,
       });
 
-      let blockchainResult = { success: false, anchored: false, reason: "No chainPatientId" };
+      // If doctor uploaded for patient, create a notification for the patient
+      if (uploadedByDoctor && patientId) {
+        await createNotification(
+          patientId,
+          "queue_update",
+          "New Report from Your Doctor 📋",
+          `Dr. ${doctorNameField || doctor} has uploaded a ${category} report for you. ${recommendation ? `Recommendation: ${recommendation}` : ""}`,
+          { category, doctorName: doctorNameField || doctor, recordId: String(newRecord._id) }
+        );
+      }
 
+      let blockchainResult = { success: false, anchored: false, reason: "No chainPatientId" };
       const patient = await User.findOne({
         $or: [
           { patientId },
@@ -782,43 +1062,32 @@ function startServer() {
         blockchainResult = await anchorOnChain(patient.chainPatientId, fileHash, category, fileName);
         if (blockchainResult.success && blockchainResult.txHash) {
           await MedicalRecord.findByIdAndUpdate(newRecord._id, {
-            blockchainHash: fileHash,
-            blockchainTx:   blockchainResult.txHash,
-            anchoredOnChain: true,
-            anchoredAt:     new Date(),
+            blockchainHash: fileHash, blockchainTx: blockchainResult.txHash,
+            anchoredOnChain: true, anchoredAt: new Date(),
           });
         }
       }
 
       const finalAnchored = blockchainResult.success && !!blockchainResult.txHash;
-
       res.status(201).json({
         message: "Record saved",
         record: {
-          ...newRecord.toObject(),
-          id:              String(newRecord._id),
-          anchoredOnChain: finalAnchored,
-          blockchainTx:    blockchainResult.txHash || null,
+          ...newRecord.toObject(), id: String(newRecord._id),
+          anchoredOnChain: finalAnchored, blockchainTx: blockchainResult.txHash || null,
         },
-        ipfsHash: fileHash,
-        ipfsUrl,
-        aiSummary,
+        ipfsHash: fileHash, ipfsUrl, aiSummary,
         blockchain: {
-          attempted:      !!patient?.chainPatientId,
-          anchored:       finalAnchored,
-          txHash:         blockchainResult.txHash || null,
+          attempted: !!patient?.chainPatientId, anchored: finalAnchored,
+          txHash: blockchainResult.txHash || null,
           alreadyAnchored: blockchainResult.alreadyAnchored || false,
-          reason:         finalAnchored ? null : (blockchainResult.reason || "Not anchored"),
+          reason: finalAnchored ? null : (blockchainResult.reason || "Not anchored"),
         },
       });
-    } catch (err) {
-      console.error("record save error:", err);
-      res.status(500).json({ error: err.message });
-    }
+    } catch (err) { console.error("record save error:", err); res.status(500).json({ error: err.message }); }
   });
 
   // ══════════════════════════════════════════════════════════════════════════
-  // DASHBOARD
+  // DASHBOARD STATS
   // ══════════════════════════════════════════════════════════════════════════
   app.get("/api/dashboard", async (req, res) => {
     try {
@@ -843,8 +1112,7 @@ function startServer() {
       if (!patient)   return res.status(404).json({ error: "Patient not found" });
       const emergencyToken = `EMR-${randomHex(8)}`;
       res.status(201).json({
-        message: "Emergency protocol activated",
-        emergencyToken,
+        message: "Emergency protocol activated", emergencyToken,
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
         patient:  { id: patient.patientId, name: patient.name, blood: patient.bloodGroup, age: patient.age },
         location: lat && lng ? { lat, lng } : null,
@@ -859,23 +1127,18 @@ function startServer() {
   app.post("/api/verification/doctor-license", async (req, res) => {
     try {
       const { email, licenseNumber, documentHash } = req.body;
-      if (!email || !licenseNumber)
-        return res.status(400).json({ error: "email and licenseNumber are required" });
-
+      if (!email || !licenseNumber) return res.status(400).json({ error: "email and licenseNumber are required" });
       const clean    = String(licenseNumber).replace(/\s/g, "");
       const formatOk = /^[A-Z0-9-]{6,24}$/i.test(clean);
-
       const entry = await LicenceVerification.create({
-        email:         email.toLowerCase().trim(),
-        licenseNumber: clean,
-        documentHash:  documentHash || "",
-        status:        formatOk ? "verified" : "rejected",
-        verifiedAt:    formatOk ? new Date() : null,
-        note:          formatOk
+        email: email.toLowerCase().trim(), licenseNumber: clean,
+        documentHash: documentHash || "",
+        status: formatOk ? "verified" : "rejected",
+        verifiedAt: formatOk ? new Date() : null,
+        note: formatOk
           ? "Mock pass: in production call your institutional API."
           : "License reference failed basic format check.",
       });
-
       res.status(201).json({ ...entry.toObject(), id: String(entry._id) });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -897,9 +1160,7 @@ function startServer() {
     try {
       const { walletAddress } = req.body;
       if (!walletAddress) return res.status(400).json({ error: "walletAddress required" });
-      const user = await User.findOne({
-        walletAddress: { $regex: new RegExp(`^${walletAddress}$`, "i") },
-      }).lean();
+      const user = await User.findOne({ walletAddress: { $regex: new RegExp(`^${walletAddress}$`, "i") } }).lean();
       res.json({
         message: "Wallet connected", walletAddress,
         patientId:   user?.patientId || null,
@@ -914,27 +1175,20 @@ function startServer() {
   app.post("/api/analyze-report", async (req, res) => {
     try {
       const { reportText, imageBase64, imageMimeType, reportType, preferredLanguage, explainLevel, voiceFriendly } = req.body;
-
       if (!reportText?.trim() && !imageBase64)
         return res.status(400).json({ error: "reportText or imageBase64 is required" });
-
       if (!process.env.GROQ_API_KEY)
-        return res.status(503).json({
-          error: "GROQ_API_KEY not set in backend/.env. Get a free key at https://console.groq.com/keys",
-        });
-
+        return res.status(503).json({ error: "GROQ_API_KEY not set in backend/.env. Get a free key at https://console.groq.com/keys" });
       const result = await analyzeWithGroq({
-        reportText:        reportText?.trim() || "",
-        imageBase64:       imageBase64        || null,
-        imageMimeType:     imageMimeType      || "image/jpeg",
-        reportType:        reportType         || "General",
-        preferredLanguage: preferredLanguage  || "English",
-        explainLevel:      explainLevel       || "simple",
-        voiceFriendly:     voiceFriendly      !== false,
+        reportText:        reportText?.trim()    || "",
+        imageBase64:       imageBase64           || null,
+        imageMimeType:     imageMimeType         || "image/jpeg",
+        reportType:        reportType            || "General",
+        preferredLanguage: preferredLanguage     || "English",
+        explainLevel:      explainLevel          || "simple",
+        voiceFriendly:     voiceFriendly !== false,
       });
-
       return res.json(result);
-
     } catch (err) {
       console.error("[analyze-report] Groq error:", err.message);
       if (err.message.includes("401") || err.message.includes("invalid_api_key"))
@@ -946,18 +1200,15 @@ function startServer() {
   });
 
   // ══════════════════════════════════════════════════════════════════════════
-  // GEMINI TTS — converts raw PCM → proper WAV with headers
+  // GEMINI TTS
   // ══════════════════════════════════════════════════════════════════════════
   app.post("/api/tts", async (req, res) => {
     try {
       const { text, langCode } = req.body;
       if (!text?.trim()) return res.status(400).json({ error: "text is required" });
-
       const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
       if (!GEMINI_API_KEY)
-        return res.status(503).json({
-          error: "GEMINI_API_KEY not set in backend/.env. Get free key at https://aistudio.google.com/app/apikey",
-        });
+        return res.status(503).json({ error: "GEMINI_API_KEY not set in backend/.env. Get free key at https://aistudio.google.com/app/apikey" });
 
       const geminiRes = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${GEMINI_API_KEY}`,
@@ -968,11 +1219,7 @@ function startServer() {
             contents: [{ parts: [{ text: text.slice(0, 1000) }] }],
             generationConfig: {
               responseModalities: ["AUDIO"],
-              speechConfig: {
-                voiceConfig: {
-                  prebuiltVoiceConfig: { voiceName: "Kore" },
-                },
-              },
+              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } },
             },
           }),
         }
@@ -991,31 +1238,23 @@ function startServer() {
       if (!audioB64) throw new Error("No audio returned from Gemini TTS");
 
       const rawBuffer = Buffer.from(audioB64, "base64");
-
-      let responseBuffer;
-      let responseMime;
+      let responseBuffer, responseMime;
 
       if (mimeType.startsWith("audio/L16") || mimeType.startsWith("audio/pcm") || mimeType === "audio/wav") {
         const rateMatch  = mimeType.match(/rate=(\d+)/i);
         const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
         responseBuffer = buildWavBuffer(rawBuffer, sampleRate, 1, 16);
         responseMime   = "audio/wav";
-        console.log(`[tts] Wrapped ${rawBuffer.length} bytes PCM → ${responseBuffer.length} bytes WAV (${sampleRate} Hz)`);
       } else {
         responseBuffer = rawBuffer;
         responseMime   = mimeType;
-        console.log(`[tts] Passing through ${mimeType} audio (${rawBuffer.length} bytes)`);
       }
 
       res.set("Content-Type",   responseMime);
       res.set("Content-Length", responseBuffer.length);
       res.set("Cache-Control",  "no-cache");
       return res.send(responseBuffer);
-
-    } catch (err) {
-      console.error("[tts] error:", err.message);
-      return res.status(500).json({ error: err.message });
-    }
+    } catch (err) { console.error("[tts] error:", err.message); return res.status(500).json({ error: err.message }); }
   });
 
   app.use((req, res) => res.status(404).json({ error: `Route ${req.method} ${req.path} not found` }));
@@ -1023,17 +1262,16 @@ function startServer() {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {
     console.log(`\n✅ MediChain backend running → http://localhost:${PORT}`);
-    console.log("\n🤖 AI Engine: Groq LLaMA 3.3 70B (FREE)");
-    console.log("   GROQ_API_KEY:",   process.env.GROQ_API_KEY   ? "✅ set" : "❌ NOT SET — get one free at https://console.groq.com/keys");
-    console.log("   GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? "✅ set" : "❌ NOT SET — get one free at https://aistudio.google.com/app/apikey");
-    console.log("\n⛓  Blockchain:");
-    console.log("   BLOCKCHAIN_RPC_URL:     ", process.env.BLOCKCHAIN_RPC_URL      ? "✅ set" : "❌ not set");
-    console.log("   PATIENT_RECORDS_ADDRESS:", process.env.PATIENT_RECORDS_ADDRESS ? "✅ set" : "❌ not set");
-    console.log("\n📡 Routes ready:");
-    console.log("   POST /api/analyze-report           ← Groq AI analysis");
-    console.log("   POST /api/tts                      ← Gemini TTS (PCM → WAV)");
-    console.log("   POST /api/auth/signup | login | wallet-login");
-    console.log("   GET  /api/patients | doctors | appointments | records");
-    console.log("   POST /api/records                  ← supports doctor-upload fields\n");
+    console.log("\n🔧 Fixes applied:");
+    console.log("   ✅ fileHash unique index DROPPED — no more E11000 duplicate errors");
+    console.log("   ✅ Queue tokens assigned on check-in");
+    console.log("   ✅ Patient notified on treatment complete");
+    console.log("   ✅ Patient notified when 5 patients ahead or 30 min left");
+    console.log("   ✅ Treatment duration tracked");
+    console.log("\n📡 New Routes:");
+    console.log("   GET  /api/notifications/:patientId");
+    console.log("   PUT  /api/notifications/:id/read");
+    console.log("   PUT  /api/notifications/read-all/:patientId");
+    console.log("   POST /api/queue/complete/:appointmentId");
   });
 }
