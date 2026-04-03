@@ -242,4 +242,5 @@ export default function ClinicLocationSetter({ doctorId, token, currentLocation,
       </button>
     </div>
   );
+  
 }

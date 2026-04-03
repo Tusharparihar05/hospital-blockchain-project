@@ -17,6 +17,7 @@ const NotificationBell = ({ appointments = [] }) => {
     typeof Notification !== "undefined" && Notification.permission === "granted"
   );
   const dropdownRef = useRef(null);
+  
 
   useEffect(() => {
     // Build list of upcoming appointment alerts (within next 24 hours)

@@ -13,6 +13,7 @@ const COLORS = {
 
 const categories = ["Blood Test", "X-Ray", "MRI Scan", "CT Scan", "Ultrasound", "ECG", "Prescription", "Diagnosis Notes", "General Checkup", "Other"];
 
+
 const inputStyle = {
   width: "100%", background: COLORS.bg, border: `1px solid ${COLORS.cardBorder}`,
   color: COLORS.text, padding: "11px 14px", borderRadius: 9,

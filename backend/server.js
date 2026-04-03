@@ -13,6 +13,8 @@ const mongoUri = process.env.MONGODB_URI;
 if (!mongoUri) { console.error("❌ MONGODB_URI not set in .env"); process.exit(1); }
 if (!process.env.JWT_SECRET) { console.error("❌ JWT_SECRET not set in .env"); process.exit(1); }
 
+
+
 mongoose.connect(mongoUri)
   .then(() => { console.log("✅ MongoDB connected"); startServer(); })
   .catch(err => { console.error("❌ MongoDB error:", err.message); process.exit(1); });

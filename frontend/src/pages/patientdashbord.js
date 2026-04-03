@@ -52,6 +52,9 @@ function haversineKm(lat1, lng1, lat2, lng2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+
+
+
 // ── Nominatim geocoding ───────────────────────────────────────────────────────
 async function geocodeAddress(address) {
   const url  = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1&countrycodes=in`;

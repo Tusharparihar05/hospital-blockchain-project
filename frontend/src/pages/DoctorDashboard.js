@@ -20,6 +20,7 @@ const API_FULL = (() => {
   return base.replace(/\/api$/, "");
 })();
 
+
 function authHeaders() {
   const token = localStorage.getItem("token");
   return token
