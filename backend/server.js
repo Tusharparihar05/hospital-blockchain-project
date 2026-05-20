@@ -606,9 +606,9 @@ function startServer() {
       const entry = active[i];
       const patientsAhead = i; // 0-indexed, so position i means i patients ahead
 
-      // Notify when 5 or fewer patients ahead (and hasn't been notified yet for this threshold)
-      if (patientsAhead <= 5 && !entry.notified5 && patientsAhead > 0) {
-        entry.notified5 = true;
+      // Notify when 7 or fewer patients ahead (and hasn't been notified yet for this threshold)
+      if (patientsAhead <= 7 && !entry.notified7 && patientsAhead > 0) {
+        entry.notified7 = true;
         await createNotification(
           entry.patientId,
           "queue_update",
@@ -679,7 +679,7 @@ function startServer() {
         checkedInAt: Date.now(),
         queueToken,
         queuePosition,
-        notified5:    false,
+        notified7:    false,
         notifiedNext: false,
         notified30min: false,
       });
@@ -773,13 +773,50 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // GET /api/queue?doctorId=&date= — doctor sees full queue
-  app.get("/api/queue", (req, res) => {
-    const { doctorId, date } = req.query;
-    if (!doctorId || !date) return res.status(400).json({ error: "doctorId and date required" });
-    const key   = _qkey(doctorId, date);
-    const queue = (_queueMap.get(key) || []).filter(q => !q.done);
-    res.json({ queue, total: queue.length });
+  // GET /api/queue?doctorId=&date= — doctor/patient sees full queue (auto-synced with DB)
+  app.get("/api/queue", async (req, res) => {
+    try {
+      const { doctorId, date } = req.query;
+      if (!doctorId || !date) return res.status(400).json({ error: "doctorId and date required" });
+      const key = _qkey(doctorId, date);
+      if (!_queueMap.has(key)) {
+        _queueMap.set(key, []);
+      }
+      const queue = _queueMap.get(key);
+
+      // Auto-load confirmed appointments from DB for this doctor and date
+      const appts = await Appointment.find({ doctorId, date, status: "confirmed" }).sort({ time: 1 }).lean();
+      for (const appt of appts) {
+        const exists = queue.find(q => q.appointmentId === String(appt._id));
+        if (!exists) {
+          const queueToken    = `Q-${randomHex(4)}-${(queue.length + 1).toString().padStart(3, "0")}`;
+          const queuePosition = queue.length + 1;
+          queue.push({
+            appointmentId: String(appt._id),
+            patientId:     appt.patientId,
+            time:          appt.time,
+            done:          appt.status === "completed",
+            checkedInAt:   appt.checkedInAt ? new Date(appt.checkedInAt).getTime() : Date.now(),
+            queueToken,
+            queuePosition,
+            notified7:     false,
+            notifiedNext:  false,
+            notified30min: false,
+          });
+
+          await Appointment.findByIdAndUpdate(appt._id, {
+            checkedIn:     true,
+            checkedInAt:   appt.checkedInAt || new Date(),
+            queuePosition,
+          }).catch(() => {});
+        }
+      }
+
+      const active = queue.filter(q => !q.done);
+      res.json({ queue: active, total: active.length });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // POST /api/queue/complete/:appointmentId — doctor marks specific appointment complete
@@ -901,6 +938,38 @@ function startServer() {
         age: patientUser?.age, gender: patientUser?.gender || "",
         phone: patientUser?.phone || "", blockchain: tokenId,
       });
+
+      // Auto-add to queue if appointment is for today
+      const todayStr = new Date().toISOString().slice(0, 10);
+      if (date === todayStr && doctorId) {
+        const key = _qkey(doctorId, date);
+        if (!_queueMap.has(key)) _queueMap.set(key, []);
+        const queue = _queueMap.get(key);
+        const exists = queue.find(q => q.appointmentId === String(appt._id));
+        if (!exists) {
+          const queueToken    = `Q-${randomHex(4)}-${(queue.length + 1).toString().padStart(3, "0")}`;
+          const queuePosition = queue.length + 1;
+          queue.push({
+            appointmentId: String(appt._id),
+            patientId,
+            time,
+            done:          false,
+            checkedInAt:   Date.now(),
+            queueToken,
+            queuePosition,
+            notified7:     false,
+            notifiedNext:  false,
+            notified30min: false,
+          });
+
+          await Appointment.findByIdAndUpdate(appt._id, {
+            checkedIn:     true,
+            checkedInAt:   new Date(),
+            queuePosition,
+          }).catch(() => {});
+        }
+      }
+
       res.status(201).json({
         message: "Appointment booked",
         appointment: { ...appt.toObject(), id: String(appt._id) },

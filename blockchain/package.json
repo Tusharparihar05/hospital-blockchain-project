@@ -2,7 +2,6 @@
   "name": "medichain-blockchain",
   "version": "1.0.0",
   "description": "Hardhat smart contracts for MediChain",
-  "type": "module",
   "scripts": {
     "start": "node backend/server.js",
     "compile": "npx hardhat compile",

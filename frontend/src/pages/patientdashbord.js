@@ -194,15 +194,42 @@ function Avatar({ name, size = 48 }) {
 }
 
 // ── Notification Bell ─────────────────────────────────────────────────────────
-function NotificationBell({ appointments }) {
+function NotificationBell({ patientId }) {
   const [open, setOpen] = useState(false);
-  const ref  = useRef(null);
-  const now  = new Date();
-  const upcoming = appointments.filter(a => {
-    const t = new Date(`${a.date} ${a.time}`);
-    const h = (t - now) / 3_600_000;
-    return h > 0 && h <= 24;
-  });
+  const [notifications, setNotifications] = useState([]);
+  const ref = useRef(null);
+
+  const unreadCount = notifications.filter(n => !n.read).length;
+
+  const fetchNotifications = useCallback(async () => {
+    if (!patientId) return;
+    try {
+      const res = await fetch(`${API}/notifications/${patientId}`, { headers: authHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        
+        // Trigger browser notification for new unread notifications
+        setNotifications(prev => {
+          const prevMap = new Map(prev.map(n => [n.id || n._id, n]));
+          data.forEach(n => {
+            const nid = n.id || n._id;
+            if (!prevMap.has(nid) && !n.read) {
+              sendNotification(n.title, n.message, nid);
+            }
+          });
+          return data;
+        });
+      }
+    } catch (e) {
+      console.error("Error fetching notifications:", e);
+    }
+  }, [patientId]);
+
+  useEffect(() => {
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 10000);
+    return () => clearInterval(interval);
+  }, [fetchNotifications]);
 
   useEffect(() => {
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
@@ -210,47 +237,122 @@ function NotificationBell({ appointments }) {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  const handleMarkAllRead = async () => {
+    try {
+      const res = await fetch(`${API}/notifications/read-all/${patientId}`, { method: "PUT", headers: authHeaders() });
+      if (res.ok) {
+        setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleMarkRead = async (id) => {
+    try {
+      const res = await fetch(`${API}/notifications/${id}/read`, { method: "PUT", headers: authHeaders() });
+      if (res.ok) {
+        setNotifications(prev => prev.map(n => (n.id === id || n._id === id) ? { ...n, read: true } : n));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   return (
     <div style={{ position: "relative" }} ref={ref}>
       <button onClick={() => setOpen(o => !o)} style={{
         background: "transparent", border: `1px solid ${COLORS.cardBorder}`,
         borderRadius: "8px", padding: "8px 12px", cursor: "pointer", fontSize: "16px",
         position: "relative", color: COLORS.text,
-      }} title="Upcoming appointments">
+      }} title="Notifications">
         🔔
-        {upcoming.length > 0 && (
+        {unreadCount > 0 && (
           <span style={{
             position: "absolute", top: "-4px", right: "-4px", background: COLORS.red,
             color: "#fff", borderRadius: "50%", fontSize: "10px",
             width: "16px", height: "16px", display: "flex", alignItems: "center",
             justifyContent: "center", fontWeight: 700,
-          }}>{upcoming.length}</span>
+          }}>{unreadCount}</span>
         )}
       </button>
       {open && (
         <div style={{
-          position: "absolute", right: 0, top: "calc(100% + 8px)", width: "280px",
+          position: "absolute", right: 0, top: "calc(100% + 8px)", width: "320px",
           background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`,
           borderRadius: "12px", zIndex: 200, overflow: "hidden",
+          boxShadow: "0 10px 25px rgba(0,0,0,0.5)",
         }}>
-          <div style={{ padding: "10px 14px", borderBottom: `1px solid ${COLORS.cardBorder}`, color: COLORS.muted, fontSize: "12px", fontWeight: 600 }}>
-            Upcoming (next 24 hrs)
+          <div style={{
+            padding: "10px 14px", borderBottom: `1px solid ${COLORS.cardBorder}`,
+            color: COLORS.text, fontSize: "12px", fontWeight: 600,
+            display: "flex", justifyContent: "space-between", alignItems: "center"
+          }}>
+            <span>Notifications</span>
+            {unreadCount > 0 && (
+              <button
+                onClick={handleMarkAllRead}
+                style={{
+                  background: "transparent", border: "none", color: COLORS.accent,
+                  fontSize: 11, cursor: "pointer", fontWeight: 700, padding: 0
+                }}
+              >
+                Mark all as read
+              </button>
+            )}
           </div>
-          {upcoming.length === 0
-            ? <div style={{ padding: "16px", color: COLORS.muted, fontSize: "13px", textAlign: "center" }}>No upcoming appointments</div>
-            : upcoming.map((a, i) => {
-                const t    = new Date(`${a.date} ${a.time}`);
-                const mins = Math.round((t - now) / 60_000);
-                return (
-                  <div key={i} style={{ padding: "10px 14px", borderBottom: `1px solid ${COLORS.cardBorder}` }}>
-                    <div style={{ color: COLORS.text, fontSize: "13px", fontWeight: 600 }}>{a.doctorName || "Doctor"}</div>
-                    <div style={{ color: COLORS.muted, fontSize: "11px", marginTop: "2px" }}>
-                      {mins < 60 ? `⚡ ${mins} min` : `🕐 ${Math.round(mins / 60)} hr`} • {a.date} {a.time}
-                    </div>
+          <div style={{ maxHeight: "280px", overflowY: "auto" }}>
+            {notifications.length === 0 ? (
+              <div style={{ padding: "20px", color: COLORS.muted, fontSize: "13px", textAlign: "center" }}>
+                No notifications yet
+              </div>
+            ) : (
+              notifications.map((n, i) => (
+                <div
+                  key={n.id || n._id || i}
+                  onClick={() => !n.read && handleMarkRead(n.id || n._id)}
+                  style={{
+                    padding: "12px 14px",
+                    borderBottom: `1px solid ${COLORS.cardBorder}`,
+                    background: n.read ? "transparent" : `${COLORS.accent}05`,
+                    cursor: n.read ? "default" : "pointer",
+                    position: "relative"
+                  }}
+                >
+                  {!n.read && (
+                    <div style={{
+                      position: "absolute", left: 6, top: "50%", transform: "translateY(-50%)",
+                      width: 6, height: 6, borderRadius: "50%", background: COLORS.accent
+                    }} />
+                  )}
+                  <div style={{
+                    color: n.read ? COLORS.text : "#fff",
+                    fontSize: "13px",
+                    fontWeight: n.read ? 500 : 700,
+                    paddingLeft: n.read ? 0 : 6
+                  }}>
+                    {n.title}
                   </div>
-                );
-              })
-          }
+                  <div style={{
+                    color: COLORS.muted,
+                    fontSize: "11px",
+                    marginTop: "4px",
+                    paddingLeft: n.read ? 0 : 6
+                  }}>
+                    {n.message}
+                  </div>
+                  <div style={{
+                    color: COLORS.muted,
+                    fontSize: "9px",
+                    marginTop: "4px",
+                    textAlign: "right"
+                  }}>
+                    {new Date(n.createdAt || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -258,7 +360,7 @@ function NotificationBell({ appointments }) {
 }
 
 // ── TopBar ────────────────────────────────────────────────────────────────────
-function TopBar({ patientName, appointments, onLogout }) {
+function TopBar({ patientName, patientId, onLogout }) {
   return (
     <div style={{
       background: "#080d1a", borderBottom: `1px solid ${COLORS.cardBorder}`,
@@ -277,7 +379,7 @@ function TopBar({ patientName, appointments, onLogout }) {
         </div>
       </div>
       <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-        <NotificationBell appointments={appointments} />
+        <NotificationBell patientId={patientId} />
         <Link to="/patient/upload" style={{
           color: COLORS.accent, fontSize: 13, textDecoration: "none",
           padding: "6px 14px", borderRadius: 8, background: `${COLORS.accent}15`,
@@ -294,8 +396,24 @@ function TopBar({ patientName, appointments, onLogout }) {
 }
 
 // ── Doctor Profile Modal ──────────────────────────────────────────────────────
-function DoctorModal({ doctor, onClose, onSelect }) {
+function DoctorModal({ doctor, initialStep = "profile", onClose, onBookConfirm }) {
+  const [step, setStep] = useState(initialStep);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const [date, setDate] = useState(todayStr);
+  const [time, setTime] = useState("");
+  const [isEmergency, setIsEmergency] = useState(false);
+
+  useEffect(() => {
+    setStep(initialStep);
+    setTime("");
+    setDate(todayStr);
+    setIsEmergency(false);
+  }, [doctor, initialStep, todayStr]);
+
   if (!doctor) return null;
+
+  const avail = Array.isArray(doctor.availability) ? doctor.availability : [];
+
   return (
     <div onClick={onClose} style={{
       position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 200,
@@ -306,39 +424,125 @@ function DoctorModal({ doctor, onClose, onSelect }) {
         borderRadius: 20, padding: 32, maxWidth: 560, width: "100%",
         maxHeight: "90vh", overflowY: "auto",
       }}>
-        <div style={{ display: "flex", gap: 16, alignItems: "flex-start", marginBottom: 24 }}>
-          <Avatar name={doctor.name} size={64} />
-          <div style={{ flex: 1 }}>
-            <h2 style={{ color: COLORS.text, fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{doctor.name}</h2>
-            <p style={{ color: COLORS.accent, fontSize: 13, marginBottom: 4 }}>
-              {doctor.specialty}{doctor.hospital ? ` · ${doctor.hospital}` : ""}
-            </p>
-            {doctor.experience > 0 && (
-              <p style={{ color: COLORS.muted, fontSize: 12 }}>
-                {doctor.experience} yrs exp{doctor.education ? ` · ${doctor.education}` : ""}
-              </p>
-            )}
-            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-              {doctor.rating > 0    && <span style={{ color: COLORS.yellow, fontSize: 13 }}>⭐ {doctor.rating}</span>}
-              {doctor.fee    > 0    && <span style={{ color: COLORS.green, fontSize: 13, fontWeight: 700 }}>₹{doctor.fee}/consult</span>}
-              {doctor.licenseVerified && <span style={{ color: COLORS.green, fontSize: 12 }}>✅ Verified</span>}
+        {step === "profile" ? (
+          <>
+            <div style={{ display: "flex", gap: 16, alignItems: "flex-start", marginBottom: 24 }}>
+              <Avatar name={doctor.name} size={64} />
+              <div style={{ flex: 1 }}>
+                <h2 style={{ color: COLORS.text, fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{doctor.name}</h2>
+                <p style={{ color: COLORS.accent, fontSize: 13, marginBottom: 4 }}>
+                  {doctor.specialty}{doctor.hospital ? ` · ${doctor.hospital}` : ""}
+                </p>
+                {doctor.experience > 0 && (
+                  <p style={{ color: COLORS.muted, fontSize: 12 }}>
+                    {doctor.experience} yrs exp{doctor.education ? ` · ${doctor.education}` : ""}
+                  </p>
+                )}
+                <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                  {doctor.rating > 0    && <span style={{ color: COLORS.yellow, fontSize: 13 }}>⭐ {doctor.rating}</span>}
+                  {doctor.fee    > 0    && <span style={{ color: COLORS.green, fontSize: 13, fontWeight: 700 }}>₹{doctor.fee}/consult</span>}
+                  {doctor.licenseVerified && <span style={{ color: COLORS.green, fontSize: 12 }}>✓ Verified</span>}
+                </div>
+              </div>
+              <button onClick={onClose} style={{ background: "none", border: "none", color: COLORS.muted, fontSize: 22, cursor: "pointer" }}>×</button>
             </div>
-          </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: COLORS.muted, fontSize: 22, cursor: "pointer" }}>×</button>
-        </div>
-        {doctor.bio && (
-          <p style={{
-            color: COLORS.text, fontSize: 14, lineHeight: 1.7,
-            background: COLORS.bg, padding: 14, borderRadius: 10, marginBottom: 20,
-          }}>{doctor.bio}</p>
+            {doctor.bio && (
+              <p style={{
+                color: COLORS.text, fontSize: 14, lineHeight: 1.7,
+                background: COLORS.bg, padding: 14, borderRadius: 10, marginBottom: 20,
+              }}>{doctor.bio}</p>
+            )}
+            <button onClick={() => setStep("schedule")} style={{
+              width: "100%", padding: 14,
+              background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`,
+              border: "none", color: "#fff", fontSize: 15, fontWeight: 700, borderRadius: 12, cursor: "pointer",
+            }}>
+              Book Appointment
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+              <button onClick={() => setStep("profile")} style={{
+                background: "none", border: "none", color: COLORS.accent, fontSize: 14, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, padding: 0
+              }}>
+                ← Back to Profile
+              </button>
+              <button onClick={onClose} style={{ background: "none", border: "none", color: COLORS.muted, fontSize: 22, cursor: "pointer" }}>×</button>
+            </div>
+
+            <h3 style={{ color: COLORS.text, fontWeight: 700, fontSize: 18, marginBottom: 16 }}>Schedule Appointment</h3>
+            
+            {/* Select Date */}
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ color: COLORS.muted, fontSize: 12, display: "block", marginBottom: 6, fontWeight: 600 }}>Select Date</label>
+              <input
+                type="date"
+                min={todayStr}
+                value={date}
+                onChange={e => { setDate(e.target.value); setTime(""); }}
+                style={{
+                  width: "100%", padding: "10px 14px", background: COLORS.bg,
+                  border: `1px solid ${COLORS.cardBorder}`, borderRadius: 8,
+                  color: COLORS.text, fontSize: 14, outline: "none", boxSizing: "border-box"
+                }}
+              />
+            </div>
+
+            {/* Select Time Slot */}
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ color: COLORS.muted, fontSize: 12, display: "block", marginBottom: 6, fontWeight: 600 }}>🕐 Available Time Slots</label>
+              {avail.length > 0 ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {avail.map(t => (
+                    <button key={t} onClick={() => setTime(t)} style={{
+                      padding: "8px 14px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+                      border: `1px solid ${time === t ? COLORS.accent : COLORS.cardBorder}`,
+                      background: time === t ? `${COLORS.accent}20` : COLORS.bg,
+                      color: time === t ? COLORS.accent : COLORS.text,
+                      fontWeight: time === t ? 700 : 400,
+                    }}>{t}</button>
+                  ))}
+                </div>
+              ) : (
+                <p style={{ color: COLORS.muted, fontSize: 12 }}>No time slots set by this doctor yet.</p>
+              )}
+            </div>
+
+            {/* Emergency Priority */}
+            <div style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              marginBottom: 24, padding: "10px 14px", background: COLORS.bg,
+              borderRadius: 10, border: `1px solid ${COLORS.cardBorder}`,
+            }}>
+              <span style={{ color: COLORS.text, fontSize: 13 }}>🚨 Emergency Priority</span>
+              <div
+                onClick={() => setIsEmergency(!isEmergency)}
+                style={{
+                  width: 44, height: 24, borderRadius: 12, position: "relative",
+                  cursor: "pointer", background: isEmergency ? COLORS.red : COLORS.cardBorder,
+                }}>
+                <div style={{
+                  width: 18, height: 18, borderRadius: "50%", background: "#fff",
+                  position: "absolute", top: 3, left: isEmergency ? 23 : 3, transition: "left 0.2s",
+                }} />
+              </div>
+            </div>
+
+            <button
+              onClick={() => onBookConfirm({ doctor, date, time, isEmergency })}
+              disabled={!time}
+              style={{
+                width: "100%", padding: 14,
+                background: time ? `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})` : COLORS.cardBorder,
+                border: "none", color: time ? "#fff" : COLORS.muted, fontSize: 15, fontWeight: 700, borderRadius: 12,
+                cursor: time ? "pointer" : "not-allowed",
+              }}
+            >
+              Confirm Book & Pay
+            </button>
+          </>
         )}
-        <button onClick={() => { onSelect(doctor); onClose(); }} style={{
-          width: "100%", padding: 14,
-          background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`,
-          border: "none", color: "#fff", fontSize: 15, fontWeight: 700, borderRadius: 12, cursor: "pointer",
-        }}>
-          Book Appointment
-        </button>
       </div>
     </div>
   );
@@ -559,6 +763,161 @@ function AppointmentCard({ appt }) {
   );
 }
 
+// ── Live Queue Tracker Card ──────────────────────────────────────────────────
+function LiveQueueTrackerCard({ appt }) {
+  const [queueInfo, setQueueInfo] = useState({ queue: [], total: 0 });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    const fetchQueue = async () => {
+      try {
+        const res = await fetch(`${API}/queue?doctorId=${appt.doctorId}&date=${appt.date}`, { headers: authHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          if (active) {
+            setQueueInfo(data);
+            setLoading(false);
+          }
+        }
+      } catch (e) {
+        console.error("Queue fetch error:", e);
+      }
+    };
+    fetchQueue();
+    const interval = setInterval(fetchQueue, 10000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [appt.doctorId, appt.date]);
+
+  if (loading) {
+    return (
+      <div style={{ padding: 16, background: COLORS.bg, borderRadius: 10, border: `1px solid ${COLORS.cardBorder}`, color: COLORS.muted, fontSize: 13 }}>
+        Loading queue status for Dr. {appt.doctorName}...
+      </div>
+    );
+  }
+
+  const queue = queueInfo.queue || [];
+  const myIndex = queue.findIndex(q => q.appointmentId === String(appt._id || appt.id));
+  const myEntry = queue.find(q => q.appointmentId === String(appt._id || appt.id));
+
+  // Determine current seeing patient
+  const currentPatient = queue[0];
+  const nextPatient = queue[1];
+
+  return (
+    <div style={{
+      padding: 20, background: COLORS.bg, borderRadius: 12,
+      border: `1px solid ${myIndex === 0 ? COLORS.green : myIndex === 1 ? COLORS.yellow : COLORS.cardBorder}`,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+        <div>
+          <h4 style={{ color: COLORS.text, fontWeight: 700, fontSize: 15, margin: "0 0 4px" }}>
+            Dr. {appt.doctorName}
+          </h4>
+          <p style={{ color: COLORS.muted, fontSize: 12, margin: 0 }}>
+            {appt.specialty || appt.type} · Scheduled: {appt.time}
+          </p>
+        </div>
+        {myEntry && (
+          <div style={{ textAlign: "right" }}>
+            <span style={{
+              background: `${COLORS.accent}15`, color: COLORS.accent,
+              border: `1px solid ${COLORS.accent}30`,
+              padding: "4px 10px", borderRadius: 8, fontSize: 12, fontWeight: 700, fontFamily: "monospace"
+            }}>
+              Token: {myEntry.queueToken}
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 16 }}>
+        {/* Current Patient */}
+        <div style={{ padding: 12, background: `${COLORS.card}`, borderRadius: 10, border: `1.5px solid ${COLORS.green}30` }}>
+          <p style={{ color: COLORS.muted, fontSize: 11, margin: "0 0 4px", textTransform: "uppercase" }}>🟢 Currently Seeing</p>
+          <p style={{ color: COLORS.green, fontSize: 15, fontWeight: 800, margin: 0, fontFamily: "monospace" }}>
+            {currentPatient ? currentPatient.queueToken : "No patients in queue"}
+          </p>
+          <span style={{ color: COLORS.muted, fontSize: 11 }}>
+            {currentPatient ? `Started: ${new Date(currentPatient.checkedInAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : "—"}
+          </span>
+        </div>
+
+        {/* Next Patient */}
+        <div style={{ padding: 12, background: `${COLORS.card}`, borderRadius: 10, border: `1.5px solid ${COLORS.yellow}30` }}>
+          <p style={{ color: COLORS.muted, fontSize: 11, margin: "0 0 4px", textTransform: "uppercase" }}>⏳ Next Up</p>
+          <p style={{ color: COLORS.yellow, fontSize: 15, fontWeight: 800, margin: 0, fontFamily: "monospace" }}>
+            {nextPatient ? nextPatient.queueToken : "None"}
+          </p>
+          <span style={{ color: COLORS.muted, fontSize: 11 }}>
+            {nextPatient ? `Scheduled: ${nextPatient.time}` : "—"}
+          </span>
+        </div>
+
+        {/* Your Position */}
+        <div style={{
+          padding: 12,
+          background: myIndex === 0 ? `${COLORS.green}10` : myIndex === 1 ? `${COLORS.yellow}10` : `${COLORS.card}`,
+          borderRadius: 10,
+          border: `1.5px solid ${myIndex === 0 ? COLORS.green : myIndex === 1 ? COLORS.yellow : COLORS.cardBorder}`
+        }}>
+          <p style={{ color: COLORS.muted, fontSize: 11, margin: "0 0 4px", textTransform: "uppercase" }}>🪪 Your Position</p>
+          {myIndex !== -1 ? (
+            <>
+              <p style={{
+                color: myIndex === 0 ? COLORS.green : myIndex === 1 ? COLORS.yellow : COLORS.text,
+                fontSize: 15, fontWeight: 800, margin: 0
+              }}>
+                {myIndex === 0 ? "You're next!" : `#${myIndex + 1} in queue`}
+              </p>
+              <span style={{ color: COLORS.muted, fontSize: 11 }}>
+                {myIndex === 0 ? "Being seen now" : `${myIndex} patient(s) ahead`}
+              </span>
+            </>
+          ) : (
+            <>
+              <p style={{ color: COLORS.red, fontSize: 14, fontWeight: 700, margin: 0 }}>
+                Not in queue
+              </p>
+              <span style={{ color: COLORS.muted, fontSize: 11 }}>
+                Will appear when checked in
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+
+      {myIndex === 0 && (
+        <div style={{
+          background: `${COLORS.green}15`, border: `1.5px solid ${COLORS.green}40`,
+          borderRadius: 10, padding: "10px 14px", display: "flex", gap: 10, alignItems: "center"
+        }}>
+          <span style={{ fontSize: 18 }}>🟢</span>
+          <p style={{ color: COLORS.green, fontSize: 13, fontWeight: 600, margin: 0 }}>
+            It is your turn! Please enter the consultation room.
+          </p>
+        </div>
+      )}
+
+      {myIndex === 1 && (
+        <div style={{
+          background: `${COLORS.yellow}15`, border: `1.5px solid ${COLORS.yellow}40`,
+          borderRadius: 10, padding: "10px 14px", display: "flex", gap: 10, alignItems: "center"
+        }}>
+          <span style={{ fontSize: 18 }}>⏳</span>
+          <p style={{ color: COLORS.yellow, fontSize: 13, fontWeight: 600, margin: 0 }}>
+            You are next in line. Please be ready near the consultation room.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Doctor Report Card ────────────────────────────────────────────────────────
 function DoctorReportCard({ report, onView }) {
   const [expanded, setExpanded] = useState(false);
@@ -749,9 +1108,18 @@ function NearbyDoctors({ doctors, onBook }) {
               <Marker key={doc.id || doc._id} position={[doc.location.lat, doc.location.lng]} icon={doctorIcon}>
                 <Popup>
                   <div style={{ minWidth: 160 }}>
-                    <p style={{ fontWeight: 700 }}>{doc.name}</p>
-                    <p style={{ color: "#555", fontSize: 12 }}>{doc.specialty}</p>
-                    <p style={{ fontSize: 12 }}>{doc.distKm.toFixed(1)} km away</p>
+                    <p style={{ fontWeight: 700, marginBottom: 4 }}>{doc.name}</p>
+                    <p style={{ color: "#555", fontSize: 12, marginBottom: 4 }}>{doc.specialty}</p>
+                    <p style={{ fontSize: 12, marginBottom: 8 }}>{doc.distKm.toFixed(1)} km away</p>
+                    <button
+                      onClick={() => onBook(doc)}
+                      style={{
+                        width: "100%", padding: "6px 12px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11,
+                        background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`, color: "#fff", fontWeight: 700,
+                      }}
+                    >
+                      Book Appointment
+                    </button>
                   </div>
                 </Popup>
               </Marker>
@@ -810,6 +1178,7 @@ export function PatientDashboard() {
   const [selectedDate,   setSelectedDate]   = useState(new Date().toISOString().slice(0, 10));
   const [isEmergency,    setIsEmergency]    = useState(false);
   const [modalDoctor,    setModalDoctor]    = useState(null);
+  const [modalInitialStep, setModalInitialStep] = useState("profile");
   const [showPayment,    setShowPayment]    = useState(false);
   const [bookedTokens,   setBookedTokens]   = useState([]);
   const [filterSpec,     setFilterSpec]     = useState("All");
@@ -820,6 +1189,8 @@ export function PatientDashboard() {
   const [viewerRecord,   setViewerRecord]   = useState(null);
 
   const patientId = getStoredPatientId();
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayAppts = appointments.filter(appt => appt.date && appt.date.slice(0, 10) === todayStr);
 
   const handleLogout = () => {
     localStorage.removeItem("token");
@@ -836,6 +1207,12 @@ export function PatientDashboard() {
   }, []);
 
   useEffect(() => {
+    requestNotificationPermission().then(granted => {
+      if (granted) console.log("🔔 Browser notifications allowed.");
+    });
+  }, []);
+
+  useEffect(() => {
     if (!patientId) { setLoading(false); return; }
     let cancelled = false;
 
@@ -844,7 +1221,7 @@ export function PatientDashboard() {
       Promise.all([
         fetch(`${API}/doctors`).then(r => r.json()).catch(() => []),
         fetch(`${API}/records/${encodeURIComponent(patientId)}`, { headers }).then(r => r.json()).catch(() => []),
-        fetch(`${API}/appointments`, { headers }).then(r => r.json()).catch(() => []),
+        fetch(`${API}/appointments?patientId=${encodeURIComponent(patientId)}`, { headers }).then(r => r.json()).catch(() => []),
       ]).then(([docs, recs, appts]) => {
         if (cancelled) return;
         setDoctors(Array.isArray(docs) ? docs : []);
@@ -945,6 +1322,21 @@ export function PatientDashboard() {
             : <p style={{ color: COLORS.red, fontSize: 13, marginTop: 6 }}>⚠️ Not logged in — please log in to view your data</p>
           }
         </div>
+
+        {/* Live Queue Tracker Panel */}
+        {todayAppts.length > 0 && (
+          <div style={{ ...cardStyle, border: `1.5px solid ${COLORS.accent}40`, marginBottom: 28, background: `linear-gradient(135deg, ${COLORS.card}, #121d3a)` }}>
+            <h3 style={{ color: COLORS.accent, fontWeight: 700, fontSize: 16, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
+              <span>🏥 Live Queue Tracker</span>
+              <span style={{ fontSize: 11, background: `${COLORS.green}20`, color: COLORS.green, border: `1px solid ${COLORS.green}30`, padding: "2px 8px", borderRadius: 10 }}>Live Updates</span>
+            </h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              {todayAppts.map(appt => (
+                <LiveQueueTrackerCard key={appt._id || appt.id} appt={appt} />
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Stats */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 28 }}>
@@ -1187,7 +1579,7 @@ export function PatientDashboard() {
 
         {/* Nearby Doctors */}
         <div style={{ marginBottom: 28 }}>
-          <NearbyDoctors doctors={doctors} onBook={doc => { setSelectedDoctor(doc); setSelectedTime(""); }} />
+          <NearbyDoctors doctors={doctors} onBook={doc => { setModalDoctor(doc); setModalInitialStep("schedule"); }} />
         </div>
 
         {/* Health Reports */}
