@@ -163,7 +163,7 @@ const LicenceVerification = mongoose.model("LicenceVerification", licenceSchema)
 // ── Notification Schema ───────────────────────────────────────────────────────
 const notificationSchema = new mongoose.Schema({
   patientId:   { type: String, required: true, index: true },
-  type:        { type: String, enum: ["queue_update", "treatment_complete", "appointment_reminder"], required: true },
+  type:        { type: String, enum: ["queue_update", "treatment_complete", "appointment_reminder", "doctor_report", "no_show"], required: true },
   title:       { type: String, required: true },
   message:     { type: String, required: true },
   read:        { type: Boolean, default: false },
@@ -590,12 +590,65 @@ function startServer() {
   const _queueMap = new Map();
   function _qkey(doctorId, date) { return `${doctorId}::${date}`; }
 
+  // Helper: resolve canonical patientId (HLT-xxx) for notifications
+  async function resolveNotificationPatientId(patientId) {
+    if (!patientId) return null;
+    const user = await User.findOne({
+      $or: [
+        { patientId: String(patientId) },
+        ...(mongoose.isValidObjectId(patientId) ? [{ _id: patientId }] : []),
+      ],
+      role: "patient",
+    }).select("patientId").lean();
+    return user?.patientId || String(patientId);
+  }
+
+  async function notificationPatientIds(patientId) {
+    const ids = new Set([String(patientId)]);
+    const user = await User.findOne({
+      $or: [
+        { patientId: String(patientId) },
+        ...(mongoose.isValidObjectId(patientId) ? [{ _id: patientId }] : []),
+      ],
+      role: "patient",
+    }).select("patientId _id").lean();
+    if (user?.patientId) ids.add(user.patientId);
+    if (user?._id) ids.add(String(user._id));
+    return [...ids];
+  }
+
   // Helper: create notification for a patient
   async function createNotification(patientId, type, title, message, metadata = {}) {
     try {
-      await Notification.create({ patientId, type, title, message, metadata });
+      const pid = await resolveNotificationPatientId(patientId);
+      if (!pid) return;
+      await Notification.create({ patientId: pid, type, title, message, metadata });
     } catch (err) {
       console.warn("[notification] failed to create:", err.message);
+    }
+  }
+
+  // Notify patient after queue slot is closed (arrived = treatment done, no-show = missed visit)
+  async function notifyQueuePatientDone(entry, doctorName) {
+    if (!entry?.patientId) return;
+    if (entry.patientArrived) {
+      const durationMs   = entry.checkedInAt && entry.completedAt ? (entry.completedAt - entry.checkedInAt) : 0;
+      const durationMins = Math.round(durationMs / 60000);
+      await createNotification(
+        entry.patientId,
+        "treatment_complete",
+        "Treatment Completed ✅",
+        `Your consultation with Dr. ${doctorName} is complete. Duration: ${durationMins} minute${durationMins !== 1 ? "s" : ""}. Thank you for visiting MediChain!`,
+        { durationMins, doctorName, appointmentId: entry.appointmentId, queueToken: entry.queueToken }
+      );
+    } else {
+      await createNotification(
+        entry.patientId,
+        "no_show",
+        "Missed Appointment ⚠️",
+        `You did not attend your scheduled visit with Dr. ${doctorName}. Please book a new appointment from your dashboard.`,
+        { doctorName, appointmentId: entry.appointmentId, queueToken: entry.queueToken }
+      );
     }
   }
 
@@ -662,6 +715,8 @@ function startServer() {
 
       const existing = queue.find(q => q.appointmentId === appointmentId);
       if (existing) {
+        existing.patientArrived = true;
+        if (!existing.checkedInAt) existing.checkedInAt = Date.now();
         const active = queue.filter(q => !q.done);
         const pos    = active.indexOf(existing);
         return res.json({ alreadyCheckedIn: true, position: pos >= 0 ? pos : 0, ahead: Math.max(0, pos), queueToken: existing.queueToken });
@@ -676,6 +731,7 @@ function startServer() {
         patientId,
         time,
         done:       false,
+        patientArrived: true,
         checkedInAt: Date.now(),
         queueToken,
         queuePosition,
@@ -752,17 +808,10 @@ function startServer() {
           }).catch(() => {});
         }
 
-        // Notify patient their treatment is complete
         const doctor = await User.findById(doctorId).select("name").lean().catch(() => null);
         const doctorName = doctor?.name || "your doctor";
 
-        await createNotification(
-          first.patientId,
-          "treatment_complete",
-          "Treatment Completed ✅",
-          `Your consultation with Dr. ${doctorName} is complete. Duration: ${durationMins} minute${durationMins !== 1 ? "s" : ""}. Thank you for visiting MediChain!`,
-          { durationMins, doctorName, appointmentId: first.appointmentId, queueToken: first.queueToken }
-        );
+        await notifyQueuePatientDone(first, doctorName);
 
         // Check queue notifications for remaining patients
         await checkQueueNotifications(queue, doctorName);
@@ -796,7 +845,8 @@ function startServer() {
             patientId:     appt.patientId,
             time:          appt.time,
             done:          appt.status === "completed",
-            checkedInAt:   appt.checkedInAt ? new Date(appt.checkedInAt).getTime() : Date.now(),
+            patientArrived: !!(appt.checkedIn && appt.checkedInAt),
+            checkedInAt:   appt.checkedInAt ? new Date(appt.checkedInAt).getTime() : null,
             queueToken,
             queuePosition,
             notified7:     false,
@@ -805,8 +855,6 @@ function startServer() {
           });
 
           await Appointment.findByIdAndUpdate(appt._id, {
-            checkedIn:     true,
-            checkedInAt:   appt.checkedInAt || new Date(),
             queuePosition,
           }).catch(() => {});
         }
@@ -847,13 +895,7 @@ function startServer() {
         const doctor     = await User.findById(doctorId).select("name").lean().catch(() => null);
         const doctorName = doctor?.name || "your doctor";
 
-        await createNotification(
-          entry.patientId,
-          "treatment_complete",
-          "Treatment Completed ✅",
-          `Your consultation with Dr. ${doctorName} is complete. Duration: ${durationMins} minute${durationMins !== 1 ? "s" : ""}. Thank you for visiting MediChain!`,
-          { durationMins, doctorName, appointmentId, queueToken: entry.queueToken }
-        );
+        await notifyQueuePatientDone(entry, doctorName);
 
         await checkQueueNotifications(queue, doctorName);
       } else {
@@ -873,7 +915,8 @@ function startServer() {
   // GET /api/notifications/:patientId — get patient notifications
   app.get("/api/notifications/:patientId", async (req, res) => {
     try {
-      const notifications = await Notification.find({ patientId: req.params.patientId })
+      const ids = await notificationPatientIds(req.params.patientId);
+      const notifications = await Notification.find({ patientId: { $in: ids } })
         .sort({ createdAt: -1 })
         .limit(50)
         .lean();
@@ -892,7 +935,8 @@ function startServer() {
   // PUT /api/notifications/read-all/:patientId
   app.put("/api/notifications/read-all/:patientId", async (req, res) => {
     try {
-      await Notification.updateMany({ patientId: req.params.patientId, read: false }, { read: true });
+      const ids = await notificationPatientIds(req.params.patientId);
+      await Notification.updateMany({ patientId: { $in: ids }, read: false }, { read: true });
       res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -954,7 +998,8 @@ function startServer() {
             patientId,
             time,
             done:          false,
-            checkedInAt:   Date.now(),
+            patientArrived: false,
+            checkedInAt:   null,
             queueToken,
             queuePosition,
             notified7:     false,
@@ -963,8 +1008,6 @@ function startServer() {
           });
 
           await Appointment.findByIdAndUpdate(appt._id, {
-            checkedIn:     true,
-            checkedInAt:   new Date(),
             queuePosition,
           }).catch(() => {});
         }
@@ -1109,13 +1152,14 @@ function startServer() {
         ipfsUrl, anchoredOnChain: false, doctorNotes: doctorComment, aiSummary,
       });
 
-      // If doctor uploaded for patient, create a notification for the patient
-      if (uploadedByDoctor && patientId) {
+      // Notify patient when doctor/staff uploads a report for them
+      const isDoctorUpload = uploadedByDoctor || !!(doctor && doctor !== "Patient" && patientId);
+      if (isDoctorUpload && patientId) {
         await createNotification(
           patientId,
-          "queue_update",
+          "doctor_report",
           "New Report from Your Doctor 📋",
-          `Dr. ${doctorNameField || doctor} has uploaded a ${category} report for you. ${recommendation ? `Recommendation: ${recommendation}` : ""}`,
+          `Dr. ${doctorNameField || doctor} has uploaded a ${category} report for you.${doctorComment ? ` Note: ${doctorComment}` : ""}${recommendation ? ` Recommendation: ${recommendation}` : ""}`,
           { category, doctorName: doctorNameField || doctor, recordId: String(newRecord._id) }
         );
       }

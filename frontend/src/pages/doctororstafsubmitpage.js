@@ -131,12 +131,16 @@ export function DoctorSubmitPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            patientId: selectedPatient.id,
+            patientId: selectedPatient.patientId || selectedPatient.id,
             category,
             fileName: uploadedFiles[0]?.name || (notes ? `Clinical_notes_${category}.txt` : "Staff upload"),
             fileHash: fileHash || `0x${Date.now().toString(16)}`,
             doctor: "Hospital Staff",
             dept: category,
+            uploadedByDoctor: true,
+            doctorName: "Hospital Staff",
+            doctorComment: notes || "",
+            patientName: selectedPatient.name || "",
           }),
         });
         savedRecord = await res.json();

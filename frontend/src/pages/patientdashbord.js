@@ -33,6 +33,10 @@ function getStoredUser() {
   try { return JSON.parse(localStorage.getItem("user") || "{}"); } catch (_) { return {}; }
 }
 function getStoredPatientId()  { return getStoredUser().patientId || null; }
+function getNotificationPatientKey() {
+  const u = getStoredUser();
+  return u.patientId || u.id || u._id || null;
+}
 function getChainPatientId()   {
   const u = getStoredUser();
   return u.chainPatientId != null ? Number(u.chainPatientId) : null;
@@ -64,8 +68,35 @@ async function geocodeAddress(address) {
   return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
 }
 
-// ── Browser notifications ─────────────────────────────────────────────────────
+// ── Browser notifications + alert sound ───────────────────────────────────────
+let _alertAudioCtx = null;
+function playAlertBuzzer() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!_alertAudioCtx) _alertAudioCtx = new Ctx();
+    const ctx = _alertAudioCtx;
+    if (ctx.state === "suspended") ctx.resume();
+    const playTone = (freq, start, dur, gain = 0.35) => {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.value = freq;
+      g.gain.setValueAtTime(gain, start);
+      g.gain.exponentialRampToValueAtTime(0.01, start + dur);
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + dur);
+    };
+    const t = ctx.currentTime;
+    playTone(880, t, 0.12);
+    playTone(660, t + 0.14, 0.12);
+    playTone(880, t + 0.28, 0.18, 0.4);
+  } catch (_) {}
+}
 function sendNotification(title, body, tag) {
+  playAlertBuzzer();
   if (Notification.permission !== "granted") return;
   const n = new Notification(title, { body, icon: "/favicon.ico", tag, requireInteraction: true });
   n.onclick = () => { window.focus(); n.close(); };
@@ -197,37 +228,45 @@ function Avatar({ name, size = 48 }) {
 function NotificationBell({ patientId }) {
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
+  const [alertPulse, setAlertPulse] = useState(false);
   const ref = useRef(null);
+  const notifyKey = patientId || getNotificationPatientKey();
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
   const fetchNotifications = useCallback(async () => {
-    if (!patientId) return;
+    if (!notifyKey) return;
     try {
-      const res = await fetch(`${API}/notifications/${patientId}`, { headers: authHeaders() });
+      const res = await fetch(`${API}/notifications/${encodeURIComponent(notifyKey)}`, { headers: authHeaders() });
       if (res.ok) {
         const data = await res.json();
         
-        // Trigger browser notification for new unread notifications
+        // Trigger browser notification + buzzer for new unread notifications
         setNotifications(prev => {
           const prevMap = new Map(prev.map(n => [n.id || n._id, n]));
+          let hasNew = false;
           data.forEach(n => {
             const nid = n.id || n._id;
             if (!prevMap.has(nid) && !n.read) {
+              hasNew = true;
               sendNotification(n.title, n.message, nid);
             }
           });
+          if (hasNew) {
+            setAlertPulse(true);
+            setTimeout(() => setAlertPulse(false), 3000);
+          }
           return data;
         });
       }
     } catch (e) {
       console.error("Error fetching notifications:", e);
     }
-  }, [patientId]);
+  }, [notifyKey]);
 
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 10000);
+    const interval = setInterval(fetchNotifications, 5000);
     return () => clearInterval(interval);
   }, [fetchNotifications]);
 
@@ -239,7 +278,7 @@ function NotificationBell({ patientId }) {
 
   const handleMarkAllRead = async () => {
     try {
-      const res = await fetch(`${API}/notifications/read-all/${patientId}`, { method: "PUT", headers: authHeaders() });
+      const res = await fetch(`${API}/notifications/read-all/${encodeURIComponent(notifyKey)}`, { method: "PUT", headers: authHeaders() });
       if (res.ok) {
         setNotifications(prev => prev.map(n => ({ ...n, read: true })));
       }
@@ -262,9 +301,11 @@ function NotificationBell({ patientId }) {
   return (
     <div style={{ position: "relative" }} ref={ref}>
       <button onClick={() => setOpen(o => !o)} style={{
-        background: "transparent", border: `1px solid ${COLORS.cardBorder}`,
+        background: alertPulse ? `${COLORS.red}25` : "transparent",
+        border: `1px solid ${alertPulse ? COLORS.red : COLORS.cardBorder}`,
         borderRadius: "8px", padding: "8px 12px", cursor: "pointer", fontSize: "16px",
         position: "relative", color: COLORS.text,
+        animation: alertPulse ? "pulse 0.8s ease-in-out infinite" : "none",
       }} title="Notifications">
         🔔
         {unreadCount > 0 && (
@@ -379,7 +420,7 @@ function TopBar({ patientName, patientId, onLogout }) {
         </div>
       </div>
       <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-        <NotificationBell patientId={patientId} />
+        <NotificationBell patientId={patientId || getNotificationPatientKey()} />
         <Link to="/patient/upload" style={{
           color: COLORS.accent, fontSize: 13, textDecoration: "none",
           padding: "6px 14px", borderRadius: 8, background: `${COLORS.accent}15`,
@@ -1188,7 +1229,7 @@ export function PatientDashboard() {
   const [verifyStatus,   setVerifyStatus]   = useState({});
   const [viewerRecord,   setViewerRecord]   = useState(null);
 
-  const patientId = getStoredPatientId();
+  const patientId = getStoredPatientId() || getNotificationPatientKey();
   const todayStr = new Date().toISOString().slice(0, 10);
   const todayAppts = appointments.filter(appt => appt.date && appt.date.slice(0, 10) === todayStr);
 
