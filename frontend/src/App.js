@@ -1,4 +1,5 @@
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
+import { Toaster } from "sonner";
 import LandingPage from "./pages/landingpage";
 import DoctorDashboard from "./pages/DoctorDashboard";
 import DoctorSubmitPage from "./pages/doctororstafsubmitpage";
@@ -809,21 +810,44 @@ function DashboardLayout() {
 }
 
 // ─── App ──────────────────────────────────────────────────────────────────────
+
+function ProtectedRoute({ children, allowedRoles }) {
+  const userStr = localStorage.getItem("user");
+  const token = localStorage.getItem("token");
+  
+  if (!userStr || !token) {
+    return <Navigate to="/login" replace />;
+  }
+  
+  try {
+    const user = JSON.parse(userStr);
+    if (allowedRoles && !allowedRoles.includes(user.role)) {
+      return <Navigate to="/" replace />;
+    }
+    return children;
+  } catch {
+    return <Navigate to="/login" replace />;
+  }
+}
+
 export default function App() {
   return (
-    <Router>
-      <Routes>
-        <Route path="/"               element={<LandingPage />} />
-        <Route path="/signup"         element={<Signup />} />
-        <Route path="/login"          element={<Login />} />
-        <Route path="/dashboard"      element={<DashboardLayout />} />
-        <Route path="/doctor"         element={<DoctorDashboard />} />
-        <Route path="/doctor/submit"  element={<DoctorSubmitPage />} />
-        <Route path="/patient/dashboard" element={<PatientDashboard />} />
-        <Route path="/patient/upload" element={<PatientSubmit />} />
-        <Route path="/patient/analyze" element={<MedicalReportAnalyzer />} />
-        <Route path="*"               element={<NotFound />} />
-      </Routes>
-    </Router>
+    <>
+      <Toaster position="top-right" theme="dark" richColors />
+      <Router>
+        <Routes>
+          <Route path="/"               element={<LandingPage />} />
+          <Route path="/signup"         element={<Signup />} />
+          <Route path="/login"          element={<Login />} />
+          <Route path="/dashboard"      element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>} />
+          <Route path="/doctor"         element={<ProtectedRoute allowedRoles={["doctor", "admin"]}><DoctorDashboard /></ProtectedRoute>} />
+          <Route path="/doctor/submit"  element={<ProtectedRoute allowedRoles={["doctor", "admin"]}><DoctorSubmitPage /></ProtectedRoute>} />
+          <Route path="/patient/dashboard" element={<ProtectedRoute allowedRoles={["patient", "admin"]}><PatientDashboard /></ProtectedRoute>} />
+          <Route path="/patient/upload" element={<ProtectedRoute allowedRoles={["patient", "admin"]}><PatientSubmit /></ProtectedRoute>} />
+          <Route path="/patient/analyze" element={<ProtectedRoute allowedRoles={["patient", "admin"]}><MedicalReportAnalyzer /></ProtectedRoute>} />
+          <Route path="*"               element={<NotFound />} />
+        </Routes>
+      </Router>
+    </>
   );
 }

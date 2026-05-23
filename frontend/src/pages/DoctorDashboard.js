@@ -1626,7 +1626,17 @@ export default function DoctorDashboard() {
   const handleCompleteAppt = async (appt) => {
     setChainStatus(s => ({ ...s, [appt.id]: "minting" }));
     try {
+      // Mark appointment complete (DB + in-memory queue)
       await fetch(`${API}/appointments/${appt.id}/complete`, { method: "PUT", headers: authHeaders() }).catch(() => {});
+      // Also explicitly call queue/complete for guaranteed in-memory queue sync
+      const doctorId = doctor?._id || doctor?.id;
+      if (doctorId) {
+        await fetch(`${API_FULL}/api/queue/complete/${appt.id}`, {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ doctorId, date: isoToday() }),
+        }).catch(() => {});
+      }
       setChainStatus(s => ({ ...s, [appt.id]: "done" }));
       show("✅ Appointment completed!");
       setAppointments(prev => prev.map(a => a.id === appt.id ? { ...a, status: "completed" } : a));

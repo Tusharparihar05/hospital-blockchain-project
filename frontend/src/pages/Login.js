@@ -86,18 +86,7 @@ export function LoginPage() {
       toast.success(`Welcome back, ${name}!`);
       setTimeout(() => navigate("/patient/dashboard"), 500);
     } catch (err) {
-      // Only reach here on a genuine network / CORS failure (TypeError)
-      if (err instanceof TypeError) {
-        const name = resolveDisplayName(null, pEmail);
-        localStorage.setItem("user", JSON.stringify({
-          id: "USR-LOCAL", name, email: pEmail, role: "patient",
-          patientId: "HLT-0x72A91B", walletAddress: "", chainPatientId: 72,
-        }));
-        toast.success(`Welcome back, ${name}! (offline mode)`);
-        setTimeout(() => navigate("/patient/dashboard"), 500);
-      } else {
-        toast.error(err.message || "Login failed");
-      }
+      toast.error(err.message || "Login failed");
     } finally {
       setLoading(false);
     }
@@ -132,17 +121,7 @@ export function LoginPage() {
       toast.success(`Welcome back, ${name}!`);
       setTimeout(() => navigate("/doctor"), 500);
     } catch (err) {
-      if (err instanceof TypeError) {
-        const name = resolveDisplayName(null, dEmail);
-        localStorage.setItem("user", JSON.stringify({
-          id: "USR-LOCAL", name, email: dEmail, role: "doctor",
-          specialty: "", licenseNumber: "", walletAddress: "",
-        }));
-        toast.success(`Welcome back, ${name}! (offline mode)`);
-        setTimeout(() => navigate("/doctor"), 500);
-      } else {
-        toast.error(err.message || "Login failed");
-      }
+      toast.error(err.message || "Login failed");
     } finally {
       setLoading(false);
     }
@@ -160,6 +139,10 @@ export function LoginPage() {
           body: JSON.stringify({ walletAddress: address }),
         });
         const data = await res.json();
+        if (!res.ok) {
+          toast.error(data.error || "Wallet authentication failed");
+          return;
+        }
         if (data.token) localStorage.setItem("token", data.token);
         if (data.user) {
           localStorage.setItem("user", JSON.stringify(data.user));
@@ -168,11 +151,12 @@ export function LoginPage() {
           setTimeout(() => navigate(dest), 500);
           return;
         }
-      } catch (_) {}
-      toast.success(`Wallet connected: ${shortAddress(address)}`);
-      setTimeout(() => navigate(activeTab === "doctor" ? "/doctor" : "/patient/dashboard"), 500);
+      } catch (err) {
+        toast.error("Could not reach authentication server");
+        return;
+      }
     } catch (err) {
-      toast.error(err.message);
+      toast.error(err.message || "Failed to connect wallet");
     } finally {
       setLoading(false);
     }

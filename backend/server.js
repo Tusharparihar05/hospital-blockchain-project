@@ -448,14 +448,29 @@ function startServer() {
     try {
       const { walletAddress } = req.body;
       if (!walletAddress) return res.status(400).json({ error: "walletAddress is required" });
-      const user = await User.findOne({ walletAddress: { $regex: new RegExp(`^${walletAddress}$`, "i") }, isActive: true }).lean();
-      if (!user) return res.status(404).json({ error: "No account found for this wallet" });
+      
+      const cleanAddress = walletAddress.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      let user = await User.findOne({ walletAddress: { $regex: new RegExp(`^${cleanAddress}$`, "i") }, isActive: true });
+      
+      if (!user) {
+        // Auto-create a patient user for this wallet address
+        user = new User({
+          name:          `User_${walletAddress.slice(2, 8)}`,
+          email:         `wallet_${walletAddress.slice(2, 10).toLowerCase()}@medichain.local`,
+          passwordHash:  `WalletLogin_${walletAddress}`,
+          role:          "patient",
+          walletAddress,
+          isActive:      true
+        });
+        await user.save();
+      }
+
       const token = generateToken(user._id);
       return res.json({
         message: "Wallet login successful", token,
         user: {
           id: String(user._id), name: user.name, email: user.email, role: user.role,
-          patientId: user.patientId, chainPatientId: user.chainPatientId,
+          patientId: user.patientId || null, chainPatientId: user.chainPatientId || null,
           walletAddress: user.walletAddress, specialty: user.specialty, licenseNumber: user.licenseNumber,
         },
       });
@@ -466,7 +481,7 @@ function startServer() {
   // PATIENTS
   // ══════════════════════════════════════════════════════════════════════════
 
-  app.get("/api/patients", async (req, res) => {
+  app.get("/api/patients", protect, async (req, res) => {
     try {
       const patients = await User.find({ role: "patient", isActive: true })
         .select("name email phone patientId chainPatientId gender bloodGroup createdAt").lean();
@@ -479,7 +494,7 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get("/api/patients/:id", async (req, res) => {
+  app.get("/api/patients/:id", protect, async (req, res) => {
     try {
       const patient = await User.findOne({
         $or: [
@@ -703,7 +718,7 @@ function startServer() {
   }
 
   // POST /api/queue/checkin — patient checks in on arrival
-  app.post("/api/queue/checkin", async (req, res) => {
+  app.post("/api/queue/checkin", protect, async (req, res) => {
     try {
       const { appointmentId, doctorId, date, patientId, time } = req.body;
       if (!appointmentId || !doctorId || !date)
@@ -782,7 +797,7 @@ function startServer() {
   });
 
   // POST /api/queue/next — doctor marks current patient as treatment complete
-  app.post("/api/queue/next", async (req, res) => {
+  app.post("/api/queue/next", protect, async (req, res) => {
     try {
       const { doctorId, date } = req.body;
       if (!doctorId || !date) return res.status(400).json({ error: "doctorId and date required" });
@@ -868,7 +883,7 @@ function startServer() {
   });
 
   // POST /api/queue/complete/:appointmentId — doctor marks specific appointment complete
-  app.post("/api/queue/complete/:appointmentId", async (req, res) => {
+  app.post("/api/queue/complete/:appointmentId", protect, async (req, res) => {
     try {
       const { appointmentId } = req.params;
       const { doctorId, date } = req.body;
@@ -954,7 +969,7 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get("/api/appointments", async (req, res) => {
+  app.get("/api/appointments", protect, async (req, res) => {
     try {
       const { patientId } = req.query;
       const query = patientId ? { patientId } : {};
@@ -963,11 +978,22 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.post("/api/appointments", async (req, res) => {
+  app.post("/api/appointments", protect, async (req, res) => {
     try {
       const { patientId, doctorId, doctorName, dept, specialty, date, time, isEmergency, type, fee, feePaid, paymentMethod } = req.body;
       if (!date || !time)  return res.status(400).json({ error: "date and time are required" });
       if (!patientId)      return res.status(400).json({ error: "patientId is required" });
+      
+      // Past date validation
+      const todayStr = new Date().toISOString().slice(0, 10);
+      if (date < todayStr) return res.status(400).json({ error: "Cannot book appointments in the past" });
+
+      // Duplicate prevention
+      const existing = await Appointment.findOne({ 
+        patientId, doctorId, date, status: { $in: ["confirmed", "pending", "in-progress"] } 
+      }).lean();
+      if (existing) return res.status(400).json({ error: "You already have an appointment booked with this doctor on this date" });
+
       const patientUser = await User.findOne({ patientId }).lean();
       const doctorUser  = doctorId ? await User.findById(doctorId).lean() : null;
       const tokenId     = `APT-${randomHex(8)}`;
@@ -984,7 +1010,6 @@ function startServer() {
       });
 
       // Auto-add to queue if appointment is for today
-      const todayStr = new Date().toISOString().slice(0, 10);
       if (date === todayStr && doctorId) {
         const key = _qkey(doctorId, date);
         if (!_queueMap.has(key)) _queueMap.set(key, []);
@@ -1021,15 +1046,58 @@ function startServer() {
     } catch (err) { console.error("appt create error:", err); res.status(500).json({ error: err.message }); }
   });
 
-  app.put("/api/appointments/:id/complete", async (req, res) => {
+  app.put("/api/appointments/:id/complete", protect, async (req, res) => {
     try {
-      const appt = await Appointment.findByIdAndUpdate(req.params.id, { status: "completed" }, { new: true });
+      const apptId = req.params.id;
+      const existingAppt = await Appointment.findById(apptId);
+      if (!existingAppt) return res.status(404).json({ error: "Appointment not found" });
+      if (existingAppt.status === "completed") return res.status(400).json({ error: "Appointment is already completed" });
+      const appt = await Appointment.findByIdAndUpdate(apptId, {
+        status: "completed",
+        treatmentEnd: new Date(),
+      }, { new: true });
       if (!appt) return res.status(404).json({ error: "Appointment not found" });
+
+      // ── Also update the in-memory queue so patient polling /api/queue sees the change ──
+      const doctorId = String(appt.doctorId);
+      const apptDate = appt.date; // e.g. "2026-05-21"
+      const key = _qkey(doctorId, apptDate);
+      const queue = _queueMap.get(key) || [];
+      const entry = queue.find(q => q.appointmentId === apptId);
+
+      if (entry && !entry.done) {
+        entry.done        = true;
+        entry.completedAt = Date.now();
+
+        const durationMs   = entry.checkedInAt ? (entry.completedAt - entry.checkedInAt) : 0;
+        const durationMins = Math.round(durationMs / 60000);
+
+        await Appointment.findByIdAndUpdate(apptId, {
+          treatmentStart:   entry.checkedInAt ? new Date(entry.checkedInAt) : new Date(),
+          treatmentDuration: durationMins,
+        }).catch(() => {});
+
+        // Notify the patient whose treatment just completed
+        const doctor     = await User.findById(doctorId).select("name").lean().catch(() => null);
+        const doctorName = doctor?.name || "your doctor";
+
+        await createNotification(
+          entry.patientId,
+          "treatment_complete",
+          "Treatment Completed ✅",
+          `Your consultation with Dr. ${doctorName} is complete. Duration: ${durationMins} minute${durationMins !== 1 ? "s" : ""}. Thank you for visiting MediChain!`,
+          { durationMins, doctorName, appointmentId: apptId, queueToken: entry.queueToken }
+        );
+
+        // Notify remaining patients about their updated queue positions
+        await checkQueueNotifications(queue, doctorName);
+      }
+
       res.json({ message: "Appointment completed", appointment: { ...appt.toObject(), id: String(appt._id) } });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.put("/api/appointments/:id/reschedule", async (req, res) => {
+  app.put("/api/appointments/:id/reschedule", protect, async (req, res) => {
     try {
       const appt = await Appointment.findByIdAndUpdate(req.params.id, { status: "reschedule-requested" }, { new: true });
       if (!appt) return res.status(404).json({ error: "Appointment not found" });
@@ -1056,7 +1124,7 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get("/api/records", async (req, res) => {
+  app.get("/api/records", protect, async (req, res) => {
     try {
       const records = await MedicalRecord.find().sort({ createdAt: -1 }).lean();
       res.json(records.map(r => ({ ...r, id: String(r._id) })));
@@ -1081,7 +1149,7 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  app.get("/api/records/:patientId", async (req, res) => {
+  app.get("/api/records/:patientId", protect, async (req, res) => {
     try {
       const pid     = req.params.patientId;
       const records = await MedicalRecord.find({
@@ -1234,6 +1302,112 @@ function startServer() {
         nearbyHospital: { name: "City Hospital", distanceKm: 1.2, etaMinutes: 8 },
       });
     } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ROBUST SIMULATED PAYMENT GATEWAY (Razorpay Alternative)
+  // ══════════════════════════════════════════════════════════════════════════
+  const crypto = require("crypto");
+  const SIMULATED_GATEWAY_SECRET = process.env.SIMULATED_GATEWAY_SECRET || "medichain_simulated_secret_2026";
+
+  app.post("/api/payment/create-order", protect, async (req, res) => {
+    try {
+      const { amount, appointmentData } = req.body;
+      if (!amount || !appointmentData) return res.status(400).json({ error: "Amount and appointmentData required" });
+      
+      const orderId = `order_${crypto.randomBytes(8).toString("hex")}`;
+      const paymentId = `pay_${crypto.randomBytes(8).toString("hex")}`;
+      
+      const signature = crypto
+        .createHmac("sha256", SIMULATED_GATEWAY_SECRET)
+        .update(`${orderId}|${paymentId}`)
+        .digest("hex");
+        
+      res.json({ orderId, amount, currency: "INR", paymentId, signature });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/payment/verify", protect, async (req, res) => {
+    try {
+      const { orderId, paymentId, signature, appointmentData } = req.body;
+      
+      // Verify the cryptographic signature to ensure payment wasn't spoofed
+      const expectedSignature = crypto
+        .createHmac("sha256", SIMULATED_GATEWAY_SECRET)
+        .update(`${orderId}|${paymentId}`)
+        .digest("hex");
+
+      if (expectedSignature !== signature) {
+        return res.status(400).json({ error: "Payment verification failed — invalid signature" });
+      }
+
+      // Generate the blockchain token format
+      const tokenId = `APT-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+      
+      // Payment is VERIFIED ✅ — now create the appointment
+      const patientUser = await User.findOne({ patientId: appointmentData.patientId }).lean();
+      const doctorUser = await User.findById(appointmentData.doctorId).lean();
+
+      // Check for duplicates
+      const existing = await Appointment.findOne({ 
+        patientId: appointmentData.patientId, 
+        doctorId: appointmentData.doctorId, 
+        date: appointmentData.date, 
+        status: { $in: ["confirmed", "pending", "in-progress"] } 
+      }).lean();
+      
+      if (existing) return res.status(400).json({ error: "You already have an appointment booked with this doctor on this date" });
+
+      const appt = await Appointment.create({
+        ...appointmentData,
+        patientName: patientUser?.name || "",
+        doctorName: doctorUser?.name || "",
+        dept: doctorUser?.specialty || "General",
+        specialty: doctorUser?.specialty || "",
+        tokenId,
+        blockchain: tokenId,
+        feePaid: true,
+        paymentMethod: "simulated_gateway",
+        status: "confirmed",
+        age: patientUser?.age,
+        gender: patientUser?.gender || "",
+        phone: patientUser?.phone || ""
+      });
+
+      // Auto-add to queue if appointment is for today
+      const todayStr = new Date().toISOString().slice(0, 10);
+      if (appointmentData.date === todayStr && appointmentData.doctorId) {
+        const key = _qkey(appointmentData.doctorId, appointmentData.date);
+        if (!_queueMap.has(key)) _queueMap.set(key, []);
+        const queue = _queueMap.get(key);
+        const exists = queue.find(q => q.appointmentId === String(appt._id));
+        if (!exists) {
+          const queueToken    = `Q-${crypto.randomBytes(2).toString("hex").toUpperCase()}-${(queue.length + 1).toString().padStart(3, "0")}`;
+          const queuePosition = queue.length + 1;
+          queue.push({
+            appointmentId: String(appt._id),
+            patientId: appointmentData.patientId,
+            time: appointmentData.time,
+            done: false, checkedInAt: Date.now(), queueToken, queuePosition,
+            notified7: false, notifiedNext: false, notified30min: false,
+          });
+          await Appointment.findByIdAndUpdate(appt._id, { checkedIn: true, checkedInAt: new Date(), queuePosition }).catch(() => {});
+        }
+      }
+
+      res.json({
+        verified: true,
+        paymentId,
+        appointmentId: String(appt._id),
+        appointment: { ...appt.toObject(), id: String(appt._id) },
+        tokenId,
+        message: "Payment verified and appointment confirmed",
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // ══════════════════════════════════════════════════════════════════════════

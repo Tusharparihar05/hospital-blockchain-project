@@ -43,9 +43,26 @@ export async function getSigner() {
 
 // ── Connect wallet & return address ───────────────────────────────────────────
 export async function connectWallet() {
-  if (!window.ethereum) throw new Error("MetaMask not installed");
-  const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-  return accounts[0];
+  if (typeof window.ethereum === 'undefined') {
+    window.open('https://metamask.io/download.html', '_blank');
+    throw new Error("MetaMask is not installed! Please install the browser extension.");
+  }
+  
+  try {
+    const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+    if (!accounts || accounts.length === 0) {
+      throw new Error("No accounts found. Please unlock MetaMask.");
+    }
+    return accounts[0];
+  } catch (error) {
+    if (error.code === 4001) {
+      throw new Error("You rejected the connection request.");
+    } else if (error.code === -32002) {
+      throw new Error("Connection request already pending. Please open MetaMask manually to approve.");
+    } else {
+      throw new Error(error.message || "Failed to connect to MetaMask");
+    }
+  }
 }
 
 // ── Contract helpers ──────────────────────────────────────────────────────────

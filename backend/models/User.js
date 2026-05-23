@@ -17,7 +17,7 @@ const userSchema = new mongoose.Schema({
   licenseVerified: { type: Boolean, default: false },
   hospital:        { type: String, default: '' },
   experience:      { type: Number, default: 0 },
-  fee:             { type: Number, default: 500 },
+  fee:             { type: Number, default: 0 },
   rating:          { type: Number, default: 0 },
   reviewCount:     { type: Number, default: 0 },
   bio:             { type: String, default: '' },

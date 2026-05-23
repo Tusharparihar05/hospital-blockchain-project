@@ -590,114 +590,603 @@ function DoctorModal({ doctor, initialStep = "profile", onClose, onBookConfirm }
 }
 
 // ── Payment Modal ─────────────────────────────────────────────────────────────
-function PaymentModal({ doctor, time, date, isEmergency, patientId, onClose, onSuccess }) {
-  const [step,   setStep]   = useState("payment");
-  const [method, setMethod] = useState("card");
-  const [token,  setToken]  = useState("");
-  const totalFee = isEmergency ? Math.round((doctor.fee || 0) * 1.5) : (doctor.fee || 0);
+// Minimal QR Code generator - renders QR to canvas
+function renderQRCode(canvas, text, size = 200) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  canvas.width = size;
+  canvas.height = size;
 
-  const handlePay = async () => {
-    setStep("processing");
-    try {
-      const res = await fetch(`${API}/appointments`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({
-          doctorId:      doctor.id || doctor._id,
-          patientId,
-          date:          date || new Date().toISOString().slice(0, 10),
-          time,
-          type:          "Consultation",
-          isEmergency:   !!isEmergency,
-          fee:           totalFee,
-          feePaid:       true,
-          paymentMethod: method,
-        }),
-      });
-      const data = await res.json();
-      const newTok = data.id || data.blockchain || `MCT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-      setToken(newTok);
-    } catch {
-      setToken(`MCT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`);
+  const modules = 25;
+  const cellSize = size / modules;
+
+  function hashCode(str, seed = 0) {
+    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0; i < str.length; i++) {
+      const ch = str.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
     }
-    setStep("done");
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+    h2 = Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+  }
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = '#000000';
+
+  function drawFinder(x, y) {
+    for (let i = 0; i < 7; i++) {
+      for (let j = 0; j < 7; j++) {
+        if (i === 0 || i === 6 || j === 0 || j === 6 || (i >= 2 && i <= 4 && j >= 2 && j <= 4)) {
+          ctx.fillRect((x + j) * cellSize, (y + i) * cellSize, cellSize, cellSize);
+        }
+      }
+    }
+  }
+
+  drawFinder(0, 0);
+  drawFinder(modules - 7, 0);
+  drawFinder(0, modules - 7);
+
+  for (let i = 8; i < modules - 8; i++) {
+    if (i % 2 === 0) {
+      ctx.fillRect(i * cellSize, 6 * cellSize, cellSize, cellSize);
+      ctx.fillRect(6 * cellSize, i * cellSize, cellSize, cellSize);
+    }
+  }
+
+  for (let row = 0; row < modules; row++) {
+    for (let col = 0; col < modules; col++) {
+      if ((row < 9 && col < 9) || (row < 9 && col > modules - 9) || (row > modules - 9 && col < 9)) continue;
+      if (row === 6 || col === 6) continue;
+      const hash = hashCode(text, row * modules + col);
+      if (hash % 3 !== 0) {
+        ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+      }
+    }
+  }
+
+  const aX = modules - 9, aY = modules - 9;
+  for (let i = -2; i <= 2; i++) {
+    for (let j = -2; j <= 2; j++) {
+      if (Math.abs(i) === 2 || Math.abs(j) === 2 || (i === 0 && j === 0)) {
+        ctx.fillRect((aX + j) * cellSize, (aY + i) * cellSize, cellSize, cellSize);
+      }
+    }
+  }
+}
+
+function PaymentModal({ doctor, time, date, isEmergency, patientId, onClose, onSuccess }) {
+  const [step, setStep] = useState("payment");
+  const [method, setMethod] = useState("card");
+  const [token, setToken] = useState("");
+  const [processingMsg, setProcessingMsg] = useState("");
+
+  // Card form state
+  const [cardNumber, setCardNumber] = useState("");
+  const [cardExpiry, setCardExpiry] = useState("");
+  const [cardCVV, setCardCVV] = useState("");
+  const [cardHolder, setCardHolder] = useState("");
+
+  // Net banking state
+  const [selectedBank, setSelectedBank] = useState("");
+
+  // Crypto state
+  const [walletAddr, setWalletAddr] = useState("");
+
+  // UPI timer state
+  const [upiTimer, setUpiTimer] = useState(300);
+
+  const qrCanvasRef = useRef(null);
+  const successQrCanvasRef = useRef(null);
+
+  const baseFee = doctor.fee || 0;
+  const emergencySurcharge = isEmergency ? Math.round(baseFee * 0.5) : 0;
+  const platformFee = 29;
+  const totalFee = baseFee + emergencySurcharge + platformFee;
+
+  // UPI countdown timer
+  useEffect(() => {
+    if (method !== "upi" || step !== "payment") return;
+    setUpiTimer(300);
+    const interval = setInterval(() => {
+      setUpiTimer(prev => {
+        if (prev <= 1) { clearInterval(interval); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [method, step]);
+
+  // Render UPI QR code on canvas
+  useEffect(() => {
+    if (method === "upi" && step === "payment" && qrCanvasRef.current) {
+      const upiLink = `upi://pay?pa=medichain@ybl&pn=MediChain Healthcare&am=${totalFee}&tn=Appointment-${doctor.name}`;
+      renderQRCode(qrCanvasRef.current, upiLink, 200);
+    }
+  }, [method, step, totalFee, doctor.name]);
+
+  // Render success screen QR code
+  useEffect(() => {
+    if (step === "done" && successQrCanvasRef.current && token) {
+      renderQRCode(successQrCanvasRef.current, token, 120);
+    }
+  }, [step, token]);
+
+  // Card number formatting
+  const handleCardNumberChange = (e) => {
+    const raw = e.target.value.replace(/\D/g, "").slice(0, 16);
+    const formatted = raw.replace(/(.{4})/g, "$1 ").trim();
+    setCardNumber(formatted);
   };
 
+  // Expiry formatting
+  const handleExpiryChange = (e) => {
+    let raw = e.target.value.replace(/\D/g, "").slice(0, 4);
+    if (raw.length >= 3) raw = raw.slice(0, 2) + "/" + raw.slice(2);
+    setCardExpiry(raw);
+  };
+
+  const handlePay = async () => {
+    // Basic local validation
+    if (method === "card") {
+      if (cardNumber.replace(/\s/g, "").length < 15) { alert("Please enter a valid card number"); return; }
+      if (cardExpiry.length < 5) { alert("Please enter a valid expiry date (MM/YY)"); return; }
+      if (cardCVV.length < 3) { alert("Please enter a valid CVV"); return; }
+    } else if (method === "upi") {
+      // UPI validation not needed since they scan the QR
+    } else if (method === "crypto") {
+      if (walletAddr.length < 40) { alert("Please enter a valid wallet address"); return; }
+    }
+
+    setStep("processing");
+    setProcessingMsg("Creating payment order...");
+
+    const appointmentData = {
+      doctorId: doctor.id || doctor._id,
+      patientId,
+      date: date || new Date().toISOString().slice(0, 10),
+      time,
+      type: "Consultation",
+      isEmergency: !!isEmergency,
+      fee: totalFee,
+    };
+
+    try {
+      // 1. Create Order
+      const orderRes = await fetch(`${API}/payment/create-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ amount: totalFee, appointmentData }),
+      });
+      const orderData = await orderRes.json();
+      if (!orderRes.ok) throw new Error(orderData.error || "Failed to create order");
+
+      setProcessingMsg("Authorizing payment...");
+      await new Promise(r => setTimeout(r, 1200)); // Simulate gateway delay
+
+      setProcessingMsg("Verifying payment signature...");
+      // 2. Verify Payment
+      const verifyRes = await fetch(`${API}/payment/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ 
+          orderId: orderData.orderId,
+          paymentId: orderData.paymentId,
+          signature: orderData.signature,
+          appointmentData 
+        }),
+      });
+      const verifyData = await verifyRes.json();
+      if (!verifyRes.ok) throw new Error(verifyData.error || "Payment verification failed");
+
+      setProcessingMsg("Recording on blockchain...");
+      await new Promise(r => setTimeout(r, 800));
+
+      setToken(verifyData.tokenId);
+      setStep("done");
+      if (onSuccess) onSuccess(verifyData.appointment);
+    } catch (err) {
+      alert(err.message);
+      setStep("payment");
+    }
+  };
+
+  const formatTimer = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+  const inputStyle = {
+    width: "100%", padding: "10px 14px", background: COLORS.bg,
+    border: `1px solid ${COLORS.cardBorder}`, borderRadius: 8,
+    color: COLORS.text, fontSize: 14, outline: "none", boxSizing: "border-box",
+    fontFamily: "inherit",
+  };
+  const labelStyle = {
+    color: COLORS.muted, fontSize: 11, display: "block", marginBottom: 5, fontWeight: 600,
+    textTransform: "uppercase", letterSpacing: 0.5,
+  };
+
+  // ── Processing screen ──
   if (step === "processing") return (
     <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 300,
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 300,
       display: "flex", alignItems: "center", justifyContent: "center",
+      backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
     }}>
-      <div style={{ textAlign: "center", color: COLORS.text }}>
-        <div style={{ fontSize: 48, marginBottom: 16 }}>⛓️</div>
-        <p style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Processing Payment…</p>
+      <div style={{
+        textAlign: "center", color: COLORS.text,
+        background: `${COLORS.card}ee`, border: `1px solid ${COLORS.cardBorder}`,
+        borderRadius: 24, padding: "48px 40px", maxWidth: 380, width: "100%",
+        backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
+      }}>
+        <div style={{
+          fontSize: 56, marginBottom: 24,
+          animation: "pulse 1.5s ease-in-out infinite",
+        }}>⛓️</div>
+        <style>{`@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(1.1); } }`}</style>
+        <p style={{ fontSize: 18, fontWeight: 700, marginBottom: 12, color: COLORS.accent }}>{processingMsg}</p>
         <p style={{ color: COLORS.muted, fontSize: 13 }}>Booking appointment with {doctor.name}</p>
+        <div style={{
+          marginTop: 24, display: "flex", gap: 12, justifyContent: "center", alignItems: "center",
+        }}>
+          {["Verifying payment...", "Recording on blockchain...", "Generating token..."].map((label, i) => (
+            <div key={i} style={{
+              width: 10, height: 10, borderRadius: "50%",
+              background: processingMsg === label ? COLORS.accent : `${COLORS.muted}40`,
+              transition: "background 0.3s",
+              boxShadow: processingMsg === label ? `0 0 8px ${COLORS.accent}` : "none",
+            }} />
+          ))}
+        </div>
       </div>
     </div>
   );
 
+  // ── Success / Done screen ──
   if (step === "done") return (
     <div onClick={onClose} style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 300,
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 300,
       display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+      backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
     }}>
       <div onClick={e => e.stopPropagation()} style={{
-        background: COLORS.card, border: `1px solid ${COLORS.green}40`,
-        borderRadius: 20, padding: 32, maxWidth: 440, width: "100%", textAlign: "center",
+        background: `${COLORS.card}f5`, border: `1px solid ${COLORS.green}40`,
+        borderRadius: 24, padding: "36px 32px", maxWidth: 480, width: "100%", textAlign: "center",
+        backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
       }}>
-        <div style={{ fontSize: 56, marginBottom: 16 }}>🎉</div>
-        <h2 style={{ color: COLORS.green, fontSize: 22, fontWeight: 800, marginBottom: 16 }}>Appointment Confirmed!</h2>
-        <div style={{ fontFamily: "monospace", fontSize: 20, fontWeight: 800, color: COLORS.accent, marginBottom: 20, wordBreak: "break-all" }}>{token}</div>
-        <button onClick={() => { onSuccess(token); onClose(); }} style={{
-          width: "100%", padding: 13,
-          background: `linear-gradient(135deg, ${COLORS.green}, #059669)`,
-          border: "none", color: "#fff", fontSize: 14, fontWeight: 700, borderRadius: 10, cursor: "pointer",
-        }}>✅ Done</button>
+        <div style={{
+          width: 72, height: 72, borderRadius: "50%",
+          background: `${COLORS.green}20`, border: `2px solid ${COLORS.green}60`,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          margin: "0 auto 20px", fontSize: 36,
+          animation: "popIn 0.5s ease-out",
+        }}>✓</div>
+        <style>{`@keyframes popIn { 0% { transform: scale(0); opacity: 0; } 60% { transform: scale(1.2); } 100% { transform: scale(1); opacity: 1; } }`}</style>
+        <h2 style={{ color: COLORS.green, fontSize: 22, fontWeight: 800, marginBottom: 8 }}>Appointment Confirmed!</h2>
+        <p style={{ color: COLORS.muted, fontSize: 13, marginBottom: 20 }}>Your booking has been recorded on the blockchain</p>
+
+        <div style={{
+          fontFamily: "monospace", fontSize: 22, fontWeight: 800, color: COLORS.accent,
+          marginBottom: 20, wordBreak: "break-all",
+          background: `${COLORS.accent}10`, padding: "12px 16px", borderRadius: 12,
+          border: `1px solid ${COLORS.accent}30`,
+        }}>{token}</div>
+
+        <canvas ref={successQrCanvasRef} style={{
+          borderRadius: 10, margin: "0 auto 20px", display: "block",
+          border: `4px solid #fff`, background: "#fff",
+        }} />
+
+        <div style={{
+          background: COLORS.bg, borderRadius: 12, padding: 16, marginBottom: 20,
+          border: `1px solid ${COLORS.cardBorder}`, textAlign: "left",
+        }}>
+          <p style={{ color: COLORS.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: 1, marginBottom: 12, fontWeight: 600 }}>Appointment Summary</p>
+          {[
+            { label: "Doctor", value: doctor.name },
+            { label: "Date", value: date || new Date().toISOString().slice(0, 10) },
+            { label: "Time", value: time },
+            { label: "Fee Paid", value: `₹${totalFee}` },
+          ].map((row, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+              <span style={{ color: COLORS.muted, fontSize: 13 }}>{row.label}</span>
+              <span style={{ color: COLORS.text, fontSize: 13, fontWeight: 600 }}>{row.value}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={() => { onSuccess(token); onClose(); }} style={{
+            flex: 1, padding: 13,
+            background: `linear-gradient(135deg, ${COLORS.green}, #059669)`,
+            border: "none", color: "#fff", fontSize: 14, fontWeight: 700, borderRadius: 10, cursor: "pointer",
+          }}>✅ Done</button>
+          <button onClick={() => {
+            const receiptText = `MediChain Receipt\nToken: ${token}\nDoctor: ${doctor.name}\nDate: ${date}\nTime: ${time}\nFee: ₹${totalFee}`;
+            const blob = new Blob([receiptText], { type: "text/plain" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url; a.download = `receipt-${token}.txt`; a.click();
+            URL.revokeObjectURL(url);
+          }} style={{
+            flex: 1, padding: 13,
+            background: `${COLORS.accent}15`, border: `1px solid ${COLORS.accent}40`,
+            color: COLORS.accent, fontSize: 14, fontWeight: 700, borderRadius: 10, cursor: "pointer",
+          }}>📥 Download Receipt</button>
+        </div>
       </div>
     </div>
   );
+
+  // ── Payment form tabs ──
+  const tabs = [
+    { key: "card", label: "💳 Card" },
+    { key: "upi", label: "📱 UPI/QR" },
+    { key: "netbanking", label: "🏦 Net Banking" },
+    { key: "crypto", label: "🦊 Crypto" },
+  ];
 
   return (
     <div onClick={onClose} style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 300,
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 300,
       display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+      backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
     }}>
       <div onClick={e => e.stopPropagation()} style={{
-        background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`,
-        borderRadius: 20, padding: 28, maxWidth: 420, width: "100%",
+        background: `${COLORS.card}f5`, border: `1px solid ${COLORS.cardBorder}`,
+        borderRadius: 24, padding: 0, maxWidth: 480, width: "100%",
+        maxHeight: "92vh", overflowY: "auto",
+        backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
       }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h3 style={{ color: COLORS.text, fontSize: 18, fontWeight: 800 }}>💳 Payment</h3>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: COLORS.muted, fontSize: 22, cursor: "pointer" }}>×</button>
-        </div>
-        <div style={{ background: COLORS.bg, borderRadius: 12, padding: 16, marginBottom: 20 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 8, borderTop: `1px solid ${COLORS.cardBorder}`, marginTop: 4 }}>
-            <span style={{ color: COLORS.text, fontSize: 15, fontWeight: 700 }}>Total</span>
-            <span style={{ color: COLORS.accent, fontSize: 15, fontWeight: 800 }}>₹{totalFee}</span>
-          </div>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 20 }}>
-          {[
-            { key: "card",       label: "💳 Card" },
-            { key: "upi",        label: "📱 UPI" },
-            { key: "netbanking", label: "🏦 Net Banking" },
-          ].map(m => (
-            <button key={m.key} onClick={() => setMethod(m.key)} style={{
-              padding: "10px 6px", borderRadius: 10, cursor: "pointer", fontSize: 12,
-              border: `1px solid ${method === m.key ? COLORS.accent : COLORS.cardBorder}`,
-              background: method === m.key ? `${COLORS.accent}15` : COLORS.bg,
-              color: method === m.key ? COLORS.accent : COLORS.muted,
-              fontWeight: method === m.key ? 700 : 400,
-            }}>{m.label}</button>
-          ))}
-        </div>
-        <button onClick={handlePay} style={{
-          width: "100%", padding: 14,
-          background: `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`,
-          border: "none", color: "#fff", fontSize: 15, fontWeight: 700, borderRadius: 12, cursor: "pointer",
+        {/* Header */}
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          padding: "20px 24px", borderBottom: `1px solid ${COLORS.cardBorder}`,
         }}>
-          Pay ₹{totalFee} & Confirm Appointment
-        </button>
+          <div>
+            <h3 style={{ color: COLORS.text, fontSize: 18, fontWeight: 800, margin: 0 }}>💳 Secure Payment</h3>
+            <p style={{ color: COLORS.muted, fontSize: 12, margin: "4px 0 0" }}>256-bit encrypted • MediChain</p>
+          </div>
+          <button onClick={onClose} style={{
+            background: `${COLORS.muted}20`, border: "none", color: COLORS.muted,
+            fontSize: 18, cursor: "pointer", width: 32, height: 32, borderRadius: 8,
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>×</button>
+        </div>
+
+        <div style={{ padding: "20px 24px" }}>
+          {/* Fee Breakdown */}
+          <div style={{
+            background: COLORS.bg, borderRadius: 12, padding: 16, marginBottom: 20,
+            border: `1px solid ${COLORS.cardBorder}`,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+              <span style={{ color: COLORS.muted, fontSize: 13 }}>Consultation Fee</span>
+              <span style={{ color: COLORS.text, fontSize: 13 }}>₹{baseFee}</span>
+            </div>
+            {isEmergency && (
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ color: COLORS.red, fontSize: 13 }}>🚨 Emergency Surcharge</span>
+                <span style={{ color: COLORS.red, fontSize: 13 }}>₹{emergencySurcharge}</span>
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+              <span style={{ color: COLORS.muted, fontSize: 13 }}>Platform Fee</span>
+              <span style={{ color: COLORS.text, fontSize: 13 }}>₹{platformFee}</span>
+            </div>
+            <div style={{
+              display: "flex", justifyContent: "space-between", paddingTop: 10,
+              borderTop: `1px solid ${COLORS.cardBorder}`,
+            }}>
+              <span style={{ color: COLORS.text, fontSize: 16, fontWeight: 700 }}>Total</span>
+              <span style={{ color: COLORS.accent, fontSize: 16, fontWeight: 800 }}>₹{totalFee}</span>
+            </div>
+          </div>
+
+          {/* Payment Tabs */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, marginBottom: 20 }}>
+            {tabs.map(t => (
+              <button key={t.key} onClick={() => setMethod(t.key)} style={{
+                padding: "10px 4px", borderRadius: 10, cursor: "pointer", fontSize: 11,
+                border: `1px solid ${method === t.key ? COLORS.accent : COLORS.cardBorder}`,
+                background: method === t.key ? `${COLORS.accent}15` : COLORS.bg,
+                color: method === t.key ? COLORS.accent : COLORS.muted,
+                fontWeight: method === t.key ? 700 : 400,
+                transition: "all 0.2s",
+              }}>{t.label}</button>
+            ))}
+          </div>
+
+          {/* ── Card Tab ── */}
+          {method === "card" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 20 }}>
+              <div>
+                <label style={labelStyle}>Card Number</label>
+                <input
+                  placeholder="XXXX XXXX XXXX XXXX"
+                  value={cardNumber}
+                  onChange={handleCardNumberChange}
+                  maxLength={19}
+                  style={inputStyle}
+                />
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <label style={labelStyle}>Expiry Date</label>
+                  <input
+                    placeholder="MM/YY"
+                    value={cardExpiry}
+                    onChange={handleExpiryChange}
+                    maxLength={5}
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle}>CVV</label>
+                  <input
+                    placeholder="•••"
+                    value={cardCVV}
+                    onChange={e => setCardCVV(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    maxLength={4}
+                    type="password"
+                    style={inputStyle}
+                  />
+                </div>
+              </div>
+              <div>
+                <label style={labelStyle}>Cardholder Name</label>
+                <input
+                  placeholder="Name on card"
+                  value={cardHolder}
+                  onChange={e => setCardHolder(e.target.value)}
+                  style={inputStyle}
+                />
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center" }}>
+                <span style={{ color: COLORS.muted, fontSize: 11, fontWeight: 600 }}>Accepted:</span>
+                {["Visa", "Mastercard", "RuPay"].map(c => (
+                  <span key={c} style={{
+                    background: `${COLORS.accent}10`, color: COLORS.accent,
+                    border: `1px solid ${COLORS.accent}25`, borderRadius: 6,
+                    padding: "3px 8px", fontSize: 10, fontWeight: 700,
+                  }}>{c}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── UPI / QR Tab ── */}
+          {method === "upi" && (
+            <div style={{ textAlign: "center", marginBottom: 20 }}>
+              <div style={{
+                background: "#fff", borderRadius: 14, padding: 16,
+                display: "inline-block", marginBottom: 16,
+                boxShadow: "0 4px 24px rgba(0,212,255,0.15)",
+              }}>
+                <canvas ref={qrCanvasRef} style={{ display: "block", borderRadius: 6 }} />
+              </div>
+              <p style={{ color: COLORS.text, fontSize: 13, marginBottom: 4 }}>Scan with any UPI app</p>
+              <div style={{
+                display: "inline-block", background: COLORS.bg, borderRadius: 8,
+                padding: "8px 16px", border: `1px solid ${COLORS.cardBorder}`, marginBottom: 12,
+              }}>
+                <span style={{ color: COLORS.muted, fontSize: 11, marginRight: 6 }}>UPI ID:</span>
+                <span style={{ color: COLORS.accent, fontSize: 13, fontWeight: 700, fontFamily: "monospace" }}>medichain@ybl</span>
+              </div>
+              <div style={{
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 16,
+              }}>
+                <span style={{ fontSize: 14 }}>⏱️</span>
+                <span style={{
+                  color: upiTimer < 60 ? COLORS.red : COLORS.yellow,
+                  fontSize: 18, fontWeight: 800, fontFamily: "monospace",
+                }}>{formatTimer(upiTimer)}</span>
+                <span style={{ color: COLORS.muted, fontSize: 11 }}>remaining</span>
+              </div>
+              <button onClick={handlePay} style={{
+                padding: "10px 24px", borderRadius: 10, cursor: "pointer", fontSize: 13,
+                border: `1px solid ${COLORS.green}50`,
+                background: `${COLORS.green}15`, color: COLORS.green, fontWeight: 700,
+              }}>✓ Verify Payment</button>
+            </div>
+          )}
+
+          {/* ── Net Banking Tab ── */}
+          {method === "netbanking" && (
+            <div style={{ marginBottom: 20 }}>
+              <p style={{ color: COLORS.muted, fontSize: 12, marginBottom: 12, fontWeight: 600 }}>Select Your Bank</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                {[
+                  { key: "sbi", label: "SBI", icon: "🏦" },
+                  { key: "hdfc", label: "HDFC", icon: "🏛️" },
+                  { key: "icici", label: "ICICI", icon: "🏦" },
+                  { key: "axis", label: "Axis", icon: "🏛️" },
+                  { key: "kotak", label: "Kotak", icon: "🏦" },
+                  { key: "pnb", label: "PNB", icon: "🏛️" },
+                ].map(bank => (
+                  <button key={bank.key} onClick={() => setSelectedBank(bank.key)} style={{
+                    padding: "14px 8px", borderRadius: 12, cursor: "pointer",
+                    border: `1.5px solid ${selectedBank === bank.key ? COLORS.accent : COLORS.cardBorder}`,
+                    background: selectedBank === bank.key ? `${COLORS.accent}12` : COLORS.bg,
+                    color: selectedBank === bank.key ? COLORS.accent : COLORS.text,
+                    fontWeight: selectedBank === bank.key ? 700 : 500,
+                    fontSize: 13, textAlign: "center", transition: "all 0.2s",
+                    boxShadow: selectedBank === bank.key ? `0 0 12px ${COLORS.accent}20` : "none",
+                  }}>
+                    <div style={{ fontSize: 22, marginBottom: 4 }}>{bank.icon}</div>
+                    {bank.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── Crypto Tab ── */}
+          {method === "crypto" && (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{
+                background: `${COLORS.accent2}10`, border: `1px solid ${COLORS.accent2}30`,
+                borderRadius: 12, padding: 16, marginBottom: 16, textAlign: "center",
+              }}>
+                <span style={{ fontSize: 28 }}>🦊</span>
+                <p style={{ color: COLORS.text, fontSize: 14, fontWeight: 700, margin: "8px 0 4px" }}>MetaMask / Wallet Connect</p>
+                <p style={{ color: COLORS.muted, fontSize: 12 }}>Pay with cryptocurrency</p>
+              </div>
+              <div style={{
+                background: COLORS.bg, borderRadius: 10, padding: 14,
+                border: `1px solid ${COLORS.cardBorder}`, marginBottom: 14,
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+              }}>
+                <span style={{ color: COLORS.muted, fontSize: 13 }}>ETH Equivalent</span>
+                <span style={{ color: COLORS.accent, fontSize: 16, fontWeight: 800, fontFamily: "monospace" }}>
+                  Ξ {(totalFee / 250000).toFixed(6)}
+                </span>
+              </div>
+              <div>
+                <label style={labelStyle}>Wallet Address</label>
+                <input
+                  placeholder="0x..."
+                  value={walletAddr}
+                  onChange={e => setWalletAddr(e.target.value)}
+                  style={{ ...inputStyle, fontFamily: "monospace", fontSize: 12 }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Pay button (except for UPI which has its own Verify button) */}
+          {method !== "upi" && (
+            <button onClick={handlePay} disabled={
+              (method === "card" && (!cardNumber || !cardExpiry || !cardCVV || !cardHolder)) ||
+              (method === "netbanking" && !selectedBank) ||
+              (method === "crypto" && !walletAddr)
+            } style={{
+              width: "100%", padding: 14,
+              background: (
+                (method === "card" && (!cardNumber || !cardExpiry || !cardCVV || !cardHolder)) ||
+                (method === "netbanking" && !selectedBank) ||
+                (method === "crypto" && !walletAddr)
+              ) ? COLORS.cardBorder
+                : `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})`,
+              border: "none",
+              color: (
+                (method === "card" && (!cardNumber || !cardExpiry || !cardCVV || !cardHolder)) ||
+                (method === "netbanking" && !selectedBank) ||
+                (method === "crypto" && !walletAddr)
+              ) ? COLORS.muted : "#fff",
+              fontSize: 15, fontWeight: 700, borderRadius: 12,
+              cursor: (
+                (method === "card" && (!cardNumber || !cardExpiry || !cardCVV || !cardHolder)) ||
+                (method === "netbanking" && !selectedBank) ||
+                (method === "crypto" && !walletAddr)
+              ) ? "not-allowed" : "pointer",
+              transition: "all 0.2s",
+            }}>
+              Pay ₹{totalFee} & Confirm Appointment
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -826,7 +1315,7 @@ function LiveQueueTrackerCard({ appt }) {
       }
     };
     fetchQueue();
-    const interval = setInterval(fetchQueue, 10000);
+    const interval = setInterval(fetchQueue, 5000);
     return () => {
       active = false;
       clearInterval(interval);
@@ -1300,14 +1789,15 @@ export function PatientDashboard() {
     setIsEmergency(false);
     // Refresh appointments
     const headers = authHeaders();
-    fetch(`${API}/appointments`, { headers })
+    fetch(`${API}/appointments?patientId=${patientId}`, { headers })
       .then(r => r.json())
       .then(appts => { if (Array.isArray(appts)) setAppointments(appts); })
       .catch(() => {});
   };
 
-  const specialties     = ["All", ...new Set((doctors || []).map(d => d.specialty).filter(Boolean))];
-  const filteredDoctors = filterSpec === "All" ? doctors : doctors.filter(d => d.specialty === filterSpec);
+  const bookableDoctors = doctors.filter(d => d.fee > 0 && d.availability?.length > 0 && d.location?.lat);
+  const specialties     = ["All", ...new Set((bookableDoctors || []).map(d => d.specialty).filter(Boolean))];
+  const filteredDoctors = filterSpec === "All" ? bookableDoctors : bookableDoctors.filter(d => d.specialty === filterSpec);
 
   // Separate doctor-uploaded vs self-uploaded reports
   const doctorReports = reports.filter(r => r.uploadedByDoctor);
@@ -1318,6 +1808,7 @@ export function PatientDashboard() {
       <style>{`* { box-sizing: border-box; margin: 0; padding: 0; } ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #0a0f1e; } ::-webkit-scrollbar-thumb { background: #1a2540; border-radius: 3px; }`}</style>
 
       <TopBar
+        patientId={patientId}
         patientName={sessionPatient.name}
         appointments={appointments.map(a => ({ ...a, doctorName: a.doctorName || "Doctor" }))}
         onLogout={handleLogout}
@@ -1327,6 +1818,14 @@ export function PatientDashboard() {
         <DoctorModal
           doctor={modalDoctor}
           onClose={() => setModalDoctor(null)}
+          onBookConfirm={({ doctor, date, time, isEmergency }) => {
+            setSelectedDoctor(doctor);
+            setSelectedDate(date);
+            setSelectedTime(time);
+            setIsEmergency(isEmergency);
+            setModalDoctor(null);
+            setShowPayment(true);
+          }}
           onSelect={doc => { setSelectedDoctor(doc); setSelectedTime(""); }}
         />
       )}
