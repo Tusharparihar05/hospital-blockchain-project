@@ -1317,6 +1317,7 @@ function MyProfileView({ doctor: doc, onUpdateProfile, licenseVerification, onLi
   const [fee,            setFee]            = useState(doc.fee || 500);
   const [specialty,      setSpecialty]      = useState(doc.specialty || "");
   const [phone,          setPhone]          = useState(doc.phone || "");
+  const [upiId,          setUpiId]          = useState(doc.upiId || "");
   const [availability,   setAvailability]   = useState(doc.availabilityMap || {});
   const [languagesInput, setLanguagesInput] = useState((doc.languages || []).join(", "));
   const [tagsInput,      setTagsInput]      = useState((doc.tags || []).join(", "));
@@ -1329,6 +1330,7 @@ function MyProfileView({ doctor: doc, onUpdateProfile, licenseVerification, onLi
     setFee(doc.fee || 500);
     setSpecialty(doc.specialty || "");
     setPhone(doc.phone || "");
+    setUpiId(doc.upiId || "");
     setLanguagesInput((doc.languages || []).join(", "));
     setTagsInput((doc.tags || []).join(", "));
   }, [doc._id || doc.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1343,7 +1345,7 @@ function MyProfileView({ doctor: doc, onUpdateProfile, licenseVerification, onLi
         bio, hospital, education,
         experience:   Number(experience),
         fee:          Number(fee),
-        specialty, phone,
+        specialty, phone, upiId,
         availability: flatAvailability,
         availabilityMap: availability,
         languages: languagesInput.split(",").map(s => s.trim()).filter(Boolean),
@@ -1444,6 +1446,7 @@ function MyProfileView({ doctor: doc, onUpdateProfile, licenseVerification, onLi
                   { label: "Experience (years)", val: experience, set: setExperience, type: "number" },
                   { label: "Fee (₹)",            val: fee,        set: setFee,        type: "number" },
                   { label: "Phone",              val: phone,      set: setPhone },
+                  { label: "UPI ID (for payments)", val: upiId,   set: setUpiId },
                   { label: "Education",          val: education,  set: setEducation },
                 ].map(f => (
                   <div key={f.label}>
@@ -1488,6 +1491,7 @@ function MyProfileView({ doctor: doc, onUpdateProfile, licenseVerification, onLi
                   { label: "⏱️ Experience", value: doc.experience   ? `${doc.experience} years` : "Not set" },
                   { label: "💰 Fee",        value: doc.fee          ? `₹${doc.fee}` : "Not set" },
                   { label: "📱 Phone",      value: doc.phone        || "Not set" },
+                  { label: "💳 UPI ID",     value: doc.upiId        || "Not set" },
                   { label: "📜 License",    value: doc.licenseNumber || "Not set" },
                 ].map(r => (
                   <div key={r.label} style={card}>

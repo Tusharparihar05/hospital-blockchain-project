@@ -5,6 +5,8 @@ const cors     = require("cors");
 const multer   = require("multer");
 const bcrypt   = require("bcryptjs");
 const jwt      = require("jsonwebtoken");
+const Razorpay = require("razorpay");
+const crypto   = require("crypto");
 
 const app    = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -39,6 +41,7 @@ const userSchema = new mongoose.Schema({
   availabilityMap: { type: mongoose.Schema.Types.Mixed, default: {} },
   status:          { type: String, enum: ["online", "busy", "offline"], default: "online" },
   walletAddress:   { type: String, default: "" },
+  upiId:           { type: String, default: "" },
   isActive:        { type: Boolean, default: true },
   lastLogin:       { type: Date },
   location: {
@@ -347,6 +350,53 @@ function startServer() {
   app.get("/", (req, res) => res.json({ status: "ok", message: "MediChain Backend Running ✅" }));
 
   // ══════════════════════════════════════════════════════════════════════════
+  // RAZORPAY ROUTES
+  // ══════════════════════════════════════════════════════════════════════════
+  const razorpayInstance = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID || "key",
+    key_secret: process.env.RAZORPAY_KEY_SECRET || "secret",
+  });
+
+  app.post("/api/payment/create-order", async (req, res) => {
+    try {
+      const { amount, currency } = req.body;
+      if (!amount) return res.status(400).json({ error: "Amount is required" });
+
+      const options = {
+        amount: Math.round(amount * 100), // amount in smallest currency unit
+        currency: currency || "INR",
+        receipt: `rcpt_${Math.random().toString(36).substring(7)}`,
+      };
+      const order = await razorpayInstance.orders.create(options);
+      res.json(order);
+    } catch (err) {
+      console.error("Razorpay order creation error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/payment/verify", (req, res) => {
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      
+      const generated_signature = crypto
+        .createHmac("sha256", secret)
+        .update(razorpay_order_id + "|" + razorpay_payment_id)
+        .digest("hex");
+
+      if (generated_signature === razorpay_signature) {
+        res.json({ success: true, message: "Payment verified successfully" });
+      } else {
+        res.status(400).json({ success: false, error: "Payment verification failed" });
+      }
+    } catch (err) {
+      console.error("Razorpay verification error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
   // AUTH ROUTES
   // ══════════════════════════════════════════════════════════════════════════
 
@@ -360,6 +410,7 @@ function startServer() {
       const newUser = new User({
         name: name.trim(), email: email.toLowerCase().trim(), passwordHash: password,
         role: role || "patient", phone: phone || "", walletAddress: walletAddress || "",
+        upiId: req.body.upiId || "",
         specialty: specialty || "", licenseNumber: licenseNumber || "", hospital: hospital || "",
         experience: experience ? Number(experience) : 0, fee: fee ? Number(fee) : 500,
         bio: bio || "", education: education || "",
@@ -375,7 +426,7 @@ function startServer() {
         user: {
           id: String(newUser._id), name: newUser.name, email: newUser.email, role: newUser.role,
           patientId: newUser.patientId || null, chainPatientId: newUser.chainPatientId || null,
-          walletAddress: newUser.walletAddress, specialty: newUser.specialty,
+          walletAddress: newUser.walletAddress, upiId: newUser.upiId, specialty: newUser.specialty,
           licenseNumber: newUser.licenseNumber, hospital: newUser.hospital,
         },
       });
@@ -400,7 +451,7 @@ function startServer() {
         user: {
           id: String(user._id), name: user.name, email: user.email, role: user.role,
           patientId: user.patientId || null, chainPatientId: user.chainPatientId || null,
-          walletAddress: user.walletAddress, specialty: user.specialty,
+          walletAddress: user.walletAddress, upiId: user.upiId, specialty: user.specialty,
           licenseNumber: user.licenseNumber, hospital: user.hospital,
           experience: user.experience, fee: user.fee, bio: user.bio,
           education: user.education, languages: user.languages,
@@ -421,6 +472,7 @@ function startServer() {
         id: String(user._id), _id: String(user._id), name: user.name, username: user.name,
         email: user.email, role: user.role, patientId: user.patientId || null,
         chainPatientId: user.chainPatientId || null, walletAddress: user.walletAddress || "",
+        upiId: user.upiId || "",
         specialty: user.specialty || "", hospital: user.hospital || "", phone: user.phone || "",
         gender: user.gender || "", bloodGroup: user.bloodGroup || "",
         experience: user.experience || 0, fee: user.fee || 500,
@@ -461,7 +513,7 @@ function startServer() {
         user: {
           id: String(user._id), name: user.name, email: user.email, role: user.role,
           patientId: user.patientId || null, chainPatientId: user.chainPatientId || null,
-          walletAddress: user.walletAddress, specialty: user.specialty, licenseNumber: user.licenseNumber,
+          walletAddress: user.walletAddress, upiId: user.upiId, specialty: user.specialty, licenseNumber: user.licenseNumber,
         },
       });
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -518,6 +570,7 @@ function startServer() {
         reviews: [], conditions: d.tags || [], patients: 0, todayAppts: 0,
         location: d.location || { lat: null, lng: null, address: "" },
         isOnline: d.isOnline !== undefined ? d.isOnline : true,
+        upiId: d.upiId || "",
       })));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -531,6 +584,7 @@ function startServer() {
         location: doctor.location || { lat: null, lng: null, address: "" },
         isOnline: doctor.isOnline !== undefined ? doctor.isOnline : true,
         availabilityMap: doctor.availabilityMap || {},
+        upiId: doctor.upiId || "",
       });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -541,7 +595,7 @@ function startServer() {
       if (!mongoose.isValidObjectId(id)) return res.status(400).json({ error: "Invalid doctor ID" });
       if (String(req.user._id) !== id && req.user.role !== "admin")
         return res.status(403).json({ error: "Can only update your own profile" });
-      const allowedFields = ["bio", "hospital", "education", "experience", "fee", "specialty", "phone", "availability", "availabilityMap", "languages", "tags"];
+      const allowedFields = ["bio", "hospital", "education", "experience", "fee", "specialty", "phone", "availability", "availabilityMap", "languages", "tags", "upiId"];
       const update = {};
       for (const key of allowedFields) { if (req.body[key] !== undefined) update[key] = req.body[key]; }
       if (Object.keys(update).length === 0) return res.status(400).json({ error: "No valid fields to update" });
