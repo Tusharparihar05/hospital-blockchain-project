@@ -241,7 +241,7 @@ export function LoginPage() {
                 <label style={{ display: "flex", alignItems: "center", gap: 6, color: COLORS.muted, fontSize: 13 }}>
                   <input type="checkbox" /> Remember me
                 </label>
-                <a href="#" style={{ color: COLORS.accent, fontSize: 13 }}>Forgot password?</a>
+                <button type="button" onClick={(e) => { e.preventDefault(); toast.info("Password reset flow is not implemented in this demo."); }} style={{ background: "none", border: "none", color: COLORS.accent, fontSize: 13, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>Forgot password?</button>
               </div>
 
               <button type="submit" disabled={loading} style={{ ...btnPrimary, opacity: loading ? 0.7 : 1 }}>
@@ -268,7 +268,7 @@ export function LoginPage() {
                 <label style={{ display: "flex", alignItems: "center", gap: 6, color: COLORS.muted, fontSize: 13 }}>
                   <input type="checkbox" /> Remember me
                 </label>
-                <a href="#" style={{ color: COLORS.accent, fontSize: 13 }}>Forgot password?</a>
+                <button type="button" onClick={(e) => { e.preventDefault(); toast.info("Password reset flow is not implemented in this demo."); }} style={{ background: "none", border: "none", color: COLORS.accent, fontSize: 13, cursor: "pointer", padding: 0, fontFamily: "inherit" }}>Forgot password?</button>
               </div>
 
               <button type="submit" disabled={loading} style={{ ...btnPrimary, opacity: loading ? 0.7 : 1 }}>

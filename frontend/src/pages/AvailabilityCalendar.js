@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { addDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, format, isSameDay, isSameMonth } from "date-fns";
+import { addDays, startOfWeek, startOfMonth, endOfMonth, format, isSameDay } from "date-fns";
 
 export default function AvailabilityCalendar({ value, onChange }) {
   const [view, setView] = useState("week");

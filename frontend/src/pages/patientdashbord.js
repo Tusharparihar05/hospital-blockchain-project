@@ -1545,7 +1545,6 @@ function NearbyDoctors({ doctors, onBook }) {
   const [geoError,      setGeoError]      = useState("");
   const [sortedDocs,    setSortedDocs]    = useState([]);
   const [maxKm,         setMaxKm]         = useState(50);
-  const [selectedDoc,   setSelectedDoc]   = useState(null);
 
   const detectGPS = () => {
     if (!navigator.geolocation) { setGeoError("GPS not supported. Enter location manually."); return; }
@@ -1708,7 +1707,6 @@ export function PatientDashboard() {
   const [selectedDate,   setSelectedDate]   = useState(new Date().toISOString().slice(0, 10));
   const [isEmergency,    setIsEmergency]    = useState(false);
   const [modalDoctor,    setModalDoctor]    = useState(null);
-  const [modalInitialStep, setModalInitialStep] = useState("profile");
   const [showPayment,    setShowPayment]    = useState(false);
   const [bookedTokens,   setBookedTokens]   = useState([]);
   const [filterSpec,     setFilterSpec]     = useState("All");
@@ -2119,7 +2117,7 @@ export function PatientDashboard() {
 
         {/* Nearby Doctors */}
         <div style={{ marginBottom: 28 }}>
-          <NearbyDoctors doctors={doctors} onBook={doc => { setModalDoctor(doc); setModalInitialStep("schedule"); }} />
+          <NearbyDoctors doctors={doctors} onBook={setModalDoctor} />
         </div>
 
         {/* Health Reports */}

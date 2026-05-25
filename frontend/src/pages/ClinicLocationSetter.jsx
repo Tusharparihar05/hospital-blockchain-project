@@ -44,12 +44,16 @@ export default function ClinicLocationSetter({ doctorId, token, currentLocation,
   const [status,       setStatus]       = useState(""); // "", "geocoding", "gps", "saving", "saved", "error"
   const [message,      setMessage]      = useState("");
 
+  const currentLat = currentLocation?.lat;
+  const currentLng = currentLocation?.lng;
+  const currentAddress = currentLocation?.address;
+
   useEffect(() => {
-    if (currentLocation?.lat) {
-      setCoords(currentLocation);
-      setAddressInput(currentLocation.address || "");
+    if (currentLat) {
+      setCoords({ lat: currentLat, lng: currentLng, address: currentAddress || "" });
+      setAddressInput(currentAddress || "");
     }
-  }, [currentLocation?.lat]);
+  }, [currentLat, currentLng, currentAddress]);
 
   const msg = (text, st) => { setMessage(text); setStatus(st); };
 

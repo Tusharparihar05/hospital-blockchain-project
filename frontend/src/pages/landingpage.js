@@ -341,7 +341,7 @@ export default function LandingPage() {
               <ul style={{ listStyle: "none" }}>
                 {links.map(l => (
                   <li key={l} style={{ marginBottom: 10 }}>
-                    <a href="#" className="nav-link" style={{ color: COLORS.muted, fontSize: 13 }}>{l}</a>
+                    <span onClick={(e) => { e.preventDefault(); }} className="nav-link" style={{ color: COLORS.muted, fontSize: 13, cursor: "pointer" }}>{l}</span>
                   </li>
                 ))}
               </ul>
