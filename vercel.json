@@ -19,16 +19,15 @@
       "dest": "backend/server.js"
     },
     {
-      "src": "/static/(.*)",
-      "dest": "/frontend/static/$1"
+      "src": "/(.*)",
+      "dest": "frontend/$1"
     },
     {
-      "src": "/(manifest.json|favicon.ico|logo192.png|logo512.png|robots.txt)",
-      "dest": "/frontend/$1"
+      "handle": "filesystem"
     },
     {
       "src": "/(.*)",
-      "dest": "/frontend/index.html"
+      "dest": "frontend/index.html"
     }
   ]
 }
