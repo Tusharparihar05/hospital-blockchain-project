@@ -9,21 +9,6 @@ const jwt      = require("jsonwebtoken");
 const app    = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
-const mongoUri = process.env.MONGODB_URI;
-if (!mongoUri) {
-  console.warn("⚠️ MONGODB_URI not set in environment variables");
-} else {
-  mongoose.connect(mongoUri)
-    .then(() => { console.log("✅ MongoDB connected"); })
-    .catch(err => { console.error("❌ MongoDB error:", err.message); });
-}
-
-if (!process.env.JWT_SECRET) {
-  console.warn("⚠️ JWT_SECRET not set in environment variables");
-}
-
-startServer();
-
 // ══════════════════════════════════════════════════════════════════════════════
 // MONGOOSE SCHEMAS
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1571,5 +1556,20 @@ function startServer() {
     });
   }
 }
+
+const mongoUri = process.env.MONGODB_URI;
+if (!mongoUri) {
+  console.warn("⚠️ MONGODB_URI not set in environment variables");
+} else {
+  mongoose.connect(mongoUri)
+    .then(() => { console.log("✅ MongoDB connected"); })
+    .catch(err => { console.error("❌ MongoDB error:", err.message); });
+}
+
+if (!process.env.JWT_SECRET) {
+  console.warn("⚠️ JWT_SECRET not set in environment variables");
+}
+
+startServer();
 
 module.exports = app;
