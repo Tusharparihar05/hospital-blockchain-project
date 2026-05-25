@@ -10,14 +10,19 @@ const app    = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 const mongoUri = process.env.MONGODB_URI;
-if (!mongoUri) { console.error("❌ MONGODB_URI not set in .env"); process.exit(1); }
-if (!process.env.JWT_SECRET) { console.error("❌ JWT_SECRET not set in .env"); process.exit(1); }
+if (!mongoUri) {
+  console.warn("⚠️ MONGODB_URI not set in environment variables");
+} else {
+  mongoose.connect(mongoUri)
+    .then(() => { console.log("✅ MongoDB connected"); })
+    .catch(err => { console.error("❌ MongoDB error:", err.message); });
+}
 
+if (!process.env.JWT_SECRET) {
+  console.warn("⚠️ JWT_SECRET not set in environment variables");
+}
 
-
-mongoose.connect(mongoUri)
-  .then(() => { console.log("✅ MongoDB connected"); startServer(); })
-  .catch(err => { console.error("❌ MongoDB error:", err.message); process.exit(1); });
+startServer();
 
 // ══════════════════════════════════════════════════════════════════════════════
 // MONGOOSE SCHEMAS
@@ -1549,18 +1554,22 @@ function startServer() {
   app.use((req, res) => res.status(404).json({ error: `Route ${req.method} ${req.path} not found` }));
 
   const PORT = process.env.PORT || 5000;
-  app.listen(PORT, () => {
-    console.log(`\n✅ MediChain backend running → http://localhost:${PORT}`);
-    console.log("\n🔧 Fixes applied:");
-    console.log("   ✅ fileHash unique index DROPPED — no more E11000 duplicate errors");
-    console.log("   ✅ Queue tokens assigned on check-in");
-    console.log("   ✅ Patient notified on treatment complete");
-    console.log("   ✅ Patient notified when 5 patients ahead or 30 min left");
-    console.log("   ✅ Treatment duration tracked");
-    console.log("\n📡 New Routes:");
-    console.log("   GET  /api/notifications/:patientId");
-    console.log("   PUT  /api/notifications/:id/read");
-    console.log("   PUT  /api/notifications/read-all/:patientId");
-    console.log("   POST /api/queue/complete/:appointmentId");
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, () => {
+      console.log(`\n✅ MediChain backend running → http://localhost:${PORT}`);
+      console.log("\n🔧 Fixes applied:");
+      console.log("   ✅ fileHash unique index DROPPED — no more E11000 duplicate errors");
+      console.log("   ✅ Queue tokens assigned on check-in");
+      console.log("   ✅ Patient notified on treatment complete");
+      console.log("   ✅ Patient notified when 5 patients ahead or 30 min left");
+      console.log("   ✅ Treatment duration tracked");
+      console.log("\n📡 New Routes:");
+      console.log("   GET  /api/notifications/:patientId");
+      console.log("   PUT  /api/notifications/:id/read");
+      console.log("   PUT  /api/notifications/read-all/:patientId");
+      console.log("   POST /api/queue/complete/:appointmentId");
+    });
+  }
 }
+
+module.exports = app;
