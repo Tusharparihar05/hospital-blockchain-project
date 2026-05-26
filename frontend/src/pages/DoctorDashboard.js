@@ -1131,22 +1131,41 @@ function PatientsView({ patients, reports, doctor, onShowToast }) {
                                     )}
                                   </div>
 
-                                  {/* Clear button - only for uncleared reports */}
-                                  {!rec.cleared && (
-                                    <button
-                                      onClick={() => handleClearReport(rec._id)}
-                                      disabled={clearingId === rec._id}
-                                      style={{
-                                        marginTop: 10, padding: "7px 16px", borderRadius: 8,
-                                        border: `1px solid ${C.green}50`, background: `${C.green}12`,
-                                        color: C.green, fontSize: 12, fontWeight: 700, cursor: "pointer",
-                                        fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6,
-                                        opacity: clearingId === rec._id ? 0.6 : 1,
-                                      }}
-                                    >
-                                      {clearingId === rec._id ? "⏳ Clearing..." : "✅ Clear & Sign Off"}
-                                    </button>
-                                  )}
+                                  {/* Actions Row */}
+                                  <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                                    {rec.ipfsUrl === "exists" && (
+                                      <a
+                                        href={`${API}/records/file/${rec._id}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        style={{
+                                          padding: "7px 14px", borderRadius: 8,
+                                          border: `1px solid ${C.blue}40`, background: `${C.blue}12`,
+                                          color: C.blue, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                                          fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6,
+                                          textDecoration: "none"
+                                        }}
+                                      >
+                                        📄 View Report
+                                      </a>
+                                    )}
+
+                                    {!rec.cleared && (
+                                      <button
+                                        onClick={() => handleClearReport(rec._id)}
+                                        disabled={clearingId === rec._id}
+                                        style={{
+                                          padding: "7px 16px", borderRadius: 8,
+                                          border: `1px solid ${C.green}50`, background: `${C.green}12`,
+                                          color: C.green, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                                          fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6,
+                                          opacity: clearingId === rec._id ? 0.6 : 1,
+                                        }}
+                                      >
+                                        {clearingId === rec._id ? "⏳ Clearing..." : "✅ Clear & Sign Off"}
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                             );
