@@ -38,7 +38,7 @@ function notifyRecordsChanged() {
   try { localStorage.setItem("medichain-records-bump", String(Date.now())); } catch (_) {}
 }
 
-const MAX_SIZE = 20 * 1024 * 1024;
+const MAX_SIZE = 4 * 1024 * 1024; // Vercel limit is 4.5 MB
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DESIGN TOKENS
@@ -200,7 +200,7 @@ export function PatientUploadPage() {
   const addFiles = (incoming) => {
     const valid = [], big = [];
     Array.from(incoming).forEach(f => f.size > MAX_SIZE ? big.push(f.name) : valid.push(f));
-    if (big.length)   toast.error(`Too large (max 20 MB): ${big.join(", ")}`);
+    if (big.length)   toast.error(`Too large (max 4 MB due to Vercel host limits): ${big.join(", ")}`);
     if (valid.length) { setFiles(p => [...p, ...valid]); toast.success(`${valid.length} file(s) added`); }
   };
 
@@ -414,7 +414,7 @@ export function PatientUploadPage() {
             {/* Drop zone */}
             <div style={card}>
               <h3 style={{ color:C.text, fontWeight:700, fontSize:16, marginBottom:4 }}>Select Files</h3>
-              <p style={{ color:C.muted, fontSize:13, marginBottom:16 }}>PDF or image, max 20 MB per file</p>
+              <p style={{ color:C.muted, fontSize:13, marginBottom:16 }}>PDF or image, max 4 MB per file (Vercel limit)</p>
 
               <div
                 onClick={() => fileInputRef.current?.click()}
@@ -427,7 +427,7 @@ export function PatientUploadPage() {
                 <div style={{ fontSize:48, marginBottom:12 }}>☁️</div>
                 <p style={{ color:C.text, fontWeight:700, fontSize:16, marginBottom:6 }}>Drag and drop files here</p>
                 <p style={{ color:C.muted, fontSize:13, marginBottom:12 }}>or click to browse</p>
-                <span style={{ background:`${C.accent}15`, color:C.accent, border:`1px solid ${C.accent}30`, padding:"4px 14px", borderRadius:20, fontSize:12, fontWeight:600 }}>PDF, JPG, PNG · max 20 MB</span>
+                <span style={{ background:`${C.accent}15`, color:C.accent, border:`1px solid ${C.accent}30`, padding:"4px 14px", borderRadius:20, fontSize:12, fontWeight:600 }}>PDF, JPG, PNG · max 4 MB (Vercel Limit)</span>
                 <input ref={fileInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" onChange={handleChange} style={{ display:"none" }} />
               </div>
 

@@ -690,6 +690,10 @@ function DoctorUploadModal({ patient, doctor, onClose, onSuccess, onShowToast })
       form.append("doctorName",       doctor?.name || "");
       form.append("patientName",      patient.name || "");
       if (file) {
+        if (file.size > 4 * 1024 * 1024) {
+          onShowToast("File is too large. Vercel limits uploads to 4 MB.", "error");
+          return;
+        }
         form.append("file", file);
         form.append("fileName", file.name);
       } else {
@@ -783,7 +787,14 @@ function DoctorUploadModal({ patient, doctor, onClose, onSuccess, onShowToast })
                 const inp = document.createElement("input");
                 inp.type = "file";
                 inp.accept = ".pdf,.jpg,.jpeg,.png";
-                inp.onchange = e => setFile(e.target.files[0]);
+                inp.onchange = e => {
+                  const selectedFile = e.target.files[0];
+                  if (selectedFile && selectedFile.size > 4 * 1024 * 1024) {
+                    onShowToast("File is too large. Vercel limits uploads to 4 MB.", "error");
+                    return;
+                  }
+                  setFile(selectedFile);
+                };
                 inp.click();
               }}
               style={{
