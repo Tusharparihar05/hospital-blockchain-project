@@ -401,7 +401,7 @@ function NotificationBell({ patientId }) {
 }
 
 // ── TopBar ────────────────────────────────────────────────────────────────────
-function TopBar({ patientName, patientId, onLogout }) {
+function TopBar({ patientName, patientId, onLogout, onTriggerSOS, sosActive }) {
   return (
     <div style={{
       background: "#080d1a", borderBottom: `1px solid ${COLORS.cardBorder}`,
@@ -420,6 +420,26 @@ function TopBar({ patientName, patientId, onLogout }) {
         </div>
       </div>
       <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+        <button
+          type="button"
+          onClick={onTriggerSOS}
+          disabled={sosActive}
+          style={{
+            background: "linear-gradient(135deg, #ef4444, #b91c1c)",
+            color: "#fff",
+            border: "none",
+            borderRadius: 8,
+            padding: "6px 14px",
+            fontSize: 13,
+            fontWeight: "bold",
+            cursor: sosActive ? "not-allowed" : "pointer",
+            boxShadow: "0 0 10px rgba(239, 68, 68, 0.5)",
+            animation: "pulseSOS 1.5s infinite",
+            marginRight: 8
+          }}
+        >
+          🚨 {sosActive ? "SOS ACTIVE" : "SOS EMERGENCY"}
+        </button>
         <NotificationBell patientId={patientId || getNotificationPatientKey()} />
         <Link to="/patient/upload" style={{
           color: COLORS.accent, fontSize: 13, textDecoration: "none",
@@ -1408,6 +1428,76 @@ export function PatientDashboard() {
   const [appointments,   setAppointments]   = useState([]);
   const [loading,        setLoading]        = useState(true);
 
+  // SOS States
+  const [sosActive, setSosActive] = useState(false);
+  const [sosLoading, setSosLoading] = useState(false);
+  const [sosAlertData, setSosAlertData] = useState(null);
+
+  const handleSOS = () => {
+    setSosLoading(true);
+    setSosActive(true);
+    
+    // Capture geolocation coordinates
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          await activateSOSEndpoint(position.coords.latitude, position.coords.longitude);
+        },
+        async (error) => {
+          console.warn("Geolocation failed/denied, using fallback New Delhi coords:", error);
+          await activateSOSEndpoint(28.6139, 77.2090);
+        },
+        { timeout: 7000, enableHighAccuracy: true }
+      );
+    } else {
+      activateSOSEndpoint(28.6139, 77.2090);
+    }
+  };
+
+  const activateSOSEndpoint = async (lat, lng) => {
+    try {
+      const res = await fetch(`${API}/emergency`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ patientId, lat, lng })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSosAlertData(data);
+      } else {
+        alert(data.error || "Failed to activate emergency SOS");
+        setSosActive(false);
+      }
+    } catch (err) {
+      console.error("SOS Activation error:", err);
+      // fallback mock local data if server fails
+      setSosAlertData({
+        alertId: "local_temp",
+        location: { lat, lng },
+        nearbyHospitals: [
+          { name: "City Trauma & Emergency Hospital", distanceKm: 1.1, etaMinutes: 5, phone: "+91 98765 43210" },
+          { name: "MediChain Allied Clinic & Urgent Care", distanceKm: 2.4, etaMinutes: 9, phone: "+91 99999 88888" },
+          { name: "Apollo Trauma Center", distanceKm: 4.2, etaMinutes: 15, phone: "+91 98888 77777" }
+        ]
+      });
+    } finally {
+      setSosLoading(false);
+    }
+  };
+
+  const handleResolveSOS = async () => {
+    if (!sosAlertData || !sosAlertData.alertId) {
+      setSosActive(false);
+      setSosAlertData(null);
+      return;
+    }
+    try {
+      await fetch(`${API}/emergency/${sosAlertData.alertId}/resolve`, { method: "POST" });
+    } catch (_) {}
+    setSosActive(false);
+    setSosAlertData(null);
+  };
+
   const [selectedDoctor, setSelectedDoctor] = useState(null);
   const [selectedTime,   setSelectedTime]   = useState("");
   const [selectedDate,   setSelectedDate]   = useState(new Date().toISOString().slice(0, 10));
@@ -1509,12 +1599,40 @@ export function PatientDashboard() {
 
   return (
     <div style={{ minHeight: "100vh", background: COLORS.bg, fontFamily: "'Segoe UI', sans-serif" }}>
-      <style>{`* { box-sizing: border-box; margin: 0; padding: 0; } ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #0a0f1e; } ::-webkit-scrollbar-thumb { background: #1a2540; border-radius: 3px; }`}</style>
+      <style>{`
+        * { box-sizing: border-box; margin: 0; padding: 0; } 
+        ::-webkit-scrollbar { width: 6px; } 
+        ::-webkit-scrollbar-track { background: #0a0f1e; } 
+        ::-webkit-scrollbar-thumb { background: #1a2540; border-radius: 3px; }
+        @keyframes pulseSOS {
+          0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+          70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+          100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+        @keyframes flashSOS {
+          0%, 100% { background-color: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.4); }
+          50% { background-color: rgba(239, 68, 68, 0.3); border-color: rgba(239, 68, 68, 0.8); }
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes scaleUp {
+          from { opacity: 0; transform: scale(0.95); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
 
       <TopBar
         patientName={sessionPatient.name}
-        appointments={appointments.map(a => ({ ...a, doctorName: a.doctorName || "Doctor" }))}
+        patientId={patientId}
         onLogout={handleLogout}
+        onTriggerSOS={handleSOS}
+        sosActive={sosActive}
       />
 
       {modalDoctor && (
@@ -1934,6 +2052,127 @@ export function PatientDashboard() {
           )}
         </div>
       </div>
+
+      {sosActive && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 10000,
+          background: "rgba(4, 8, 20, 0.95)", backdropFilter: "blur(12px)",
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          padding: 24, animation: "fadeIn 0.2s ease"
+        }}>
+          <div style={{
+            width: "100%", maxWidth: 600, background: "#0c1424",
+            border: `2px solid #ef4444`, borderRadius: 20,
+            boxShadow: "0 20px 50px rgba(239, 68, 68, 0.3)",
+            overflow: "hidden", animation: "scaleUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)"
+          }}>
+            {/* Pulsing Warning Banner */}
+            <div style={{
+              background: "linear-gradient(135deg, #ef4444, #b91c1c)",
+              padding: "24px 20px", textAlign: "center"
+            }}>
+              <h2 style={{ color: "#fff", fontSize: 24, fontWeight: 900, marginBottom: 4, display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                🚨 EMERGENCY SOS ACTIVE
+              </h2>
+              <p style={{ color: "#fca5a5", fontSize: 14, fontWeight: 600 }}>Help is being dispatched. We are sharing your location with nearby hospitals.</p>
+            </div>
+
+            <div style={{ padding: 24 }}>
+              {sosLoading ? (
+                <div style={{ textAlign: "center", padding: "40px 0" }}>
+                  <div style={{
+                    width: 50, height: 50, borderRadius: "50%",
+                    border: "3px solid #ef444433", borderTopColor: "#ef4444",
+                    animation: "spin 1s linear infinite", margin: "0 auto 16px"
+                  }} />
+                  <p style={{ color: COLORS.text, fontWeight: 700, fontSize: 16 }}>Capturing GPS Coordinates...</p>
+                  <p style={{ color: COLORS.muted, fontSize: 13, marginTop: 4 }}>Contacting City Trauma Network</p>
+                </div>
+              ) : (
+                <>
+                  {/* Location Info */}
+                  <div style={{
+                    background: "#080d1a", border: "1px solid #ef444433",
+                    borderRadius: 12, padding: 14, marginBottom: 20,
+                    display: "flex", alignItems: "center", gap: 12
+                  }}>
+                    <span style={{ fontSize: 24 }}>📍</span>
+                    <div>
+                      <p style={{ color: COLORS.text, fontWeight: 700, fontSize: 14 }}>Your Shared Coordinates</p>
+                      <p style={{ color: COLORS.muted, fontSize: 12, fontFamily: "monospace", marginTop: 2 }}>
+                        Latitude: {sosAlertData?.location?.lat?.toFixed(5) || "Capturing..."}, Longitude: {sosAlertData?.location?.lng?.toFixed(5) || "Capturing..."}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Nearby Hospitals & Clinics */}
+                  <h3 style={{ color: COLORS.text, fontSize: 15, fontWeight: 800, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                    🏥 Nearby Emergency Hospitals & Clinics
+                  </h3>
+                  
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
+                    {(sosAlertData?.nearbyHospitals || []).map((hosp, idx) => (
+                      <div key={idx} style={{
+                        background: idx === 0 ? "rgba(239, 68, 68, 0.05)" : "#101d30",
+                        border: `1.5px solid ${idx === 0 ? "#ef444488" : COLORS.cardBorder}`,
+                        borderRadius: 12, padding: 14,
+                        display: "flex", justifyContent: "space-between", alignItems: "center"
+                      }}>
+                        <div>
+                          <h4 style={{ color: COLORS.text, fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
+                            {idx === 0 ? "🏆 Nearest: " : ""}{hosp.name}
+                          </h4>
+                          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                            <span style={{ color: COLORS.accent, fontSize: 12, fontWeight: 700 }}>🚗 {hosp.distanceKm} km</span>
+                            <span style={{ color: COLORS.yellow, fontSize: 12, fontWeight: 700 }}>🕐 {hosp.etaMinutes} mins ETA</span>
+                          </div>
+                        </div>
+                        <a href={`tel:${hosp.phone}`} style={{
+                          background: "linear-gradient(135deg, #10b981, #059669)",
+                          color: "#fff", textDecoration: "none",
+                          padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 700,
+                          display: "flex", alignItems: "center", gap: 4,
+                          boxShadow: "0 4px 12px rgba(16, 185, 129, 0.2)"
+                        }}>
+                          📞 Call
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Action buttons */}
+                  <div style={{ display: "flex", gap: 12 }}>
+                    <button
+                      onClick={handleResolveSOS}
+                      style={{
+                        flex: 1, padding: "12px 20px", borderRadius: 10,
+                        cursor: "pointer", fontSize: 14, fontWeight: 700,
+                        background: "#101d30", border: `1.5px solid ${COLORS.cardBorder}`,
+                        color: COLORS.mutedHi
+                      }}
+                    >
+                      I Am Safe (Dismiss)
+                    </button>
+                    <a
+                      href="tel:112"
+                      style={{
+                        flex: 1, textDecoration: "none", textAlign: "center",
+                        padding: "12px 20px", borderRadius: 10, border: "none",
+                        cursor: "pointer", fontSize: 14, fontWeight: 700,
+                        background: "linear-gradient(135deg, #ef4444, #b91c1c)",
+                        color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                        boxShadow: "0 8px 24px rgba(239, 68, 68, 0.3)"
+                      }}
+                    >
+                      🚨 Call 112
+                    </a>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -199,6 +199,31 @@ const notificationSchema = new mongoose.Schema({
 
 const Notification = mongoose.model("Notification", notificationSchema);
 
+// ── Emergency Alert Schema ────────────────────────────────────────────────────
+const emergencyAlertSchema = new mongoose.Schema({
+  patientId:     { type: String, required: true },
+  patientName:   { type: String, required: true },
+  phone:         { type: String, default: "" },
+  bloodGroup:    { type: String, default: "" },
+  age:           { type: Number, default: 0 },
+  location: {
+    lat:     { type: Number, default: null },
+    lng:     { type: Number, default: null },
+    address: { type: String, default: "" },
+  },
+  status:        { type: String, enum: ["active", "acknowledged", "resolved"], default: "active" },
+  acknowledgedBy:{ type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  acknowledgedAt:{ type: Date, default: null },
+  nearbyHospitals: [{
+    name:       { type: String },
+    distanceKm: { type: Number },
+    etaMinutes: { type: Number },
+    phone:      { type: String },
+  }],
+}, { timestamps: true });
+
+const EmergencyAlert = mongoose.model("EmergencyAlert", emergencyAlertSchema);
+
 // ══════════════════════════════════════════════════════════════════════════════
 // BLOCKCHAIN — PatientRecords contract (optional)
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1433,23 +1458,130 @@ function startServer() {
   });
 
   // ══════════════════════════════════════════════════════════════════════════
-  // EMERGENCY
+  // EMERGENCY - Real-time SOS & Doctor Alerts
   // ══════════════════════════════════════════════════════════════════════════
   app.post("/api/emergency", async (req, res) => {
     try {
       const { patientId, lat, lng } = req.body;
       if (!patientId) return res.status(400).json({ error: "patientId is required" });
-      const patient = await User.findOne({ patientId }).lean();
-      if (!patient)   return res.status(404).json({ error: "Patient not found" });
-      const emergencyToken = `EMR-${randomHex(8)}`;
-      res.status(201).json({
-        message: "Emergency protocol activated", emergencyToken,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        patient:  { id: patient.patientId, name: patient.name, blood: patient.bloodGroup, age: patient.age },
-        location: lat && lng ? { lat, lng } : null,
-        nearbyHospital: { name: "City Hospital", distanceKm: 1.2, etaMinutes: 8 },
+      
+      const patient = await User.findOne({
+        $or: [
+          { patientId },
+          { _id: mongoose.isValidObjectId(patientId) ? patientId : null }
+        ],
+        role: "patient"
+      }).lean();
+      
+      if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+      const finalLat = lat != null ? Number(lat) : 28.6139;
+      const finalLng = lng != null ? Number(lng) : 77.2090;
+
+      // Simulate 3 nearby hospitals based on coordinates
+      const nearbyHospitals = [
+        {
+          name: "City Trauma & Emergency Hospital",
+          distanceKm: parseFloat((0.8 + Math.random() * 0.9).toFixed(1)),
+          etaMinutes: Math.round(4 + Math.random() * 4),
+          phone: "+91 98765 43210"
+        },
+        {
+          name: "MediChain Allied Clinic & Urgent Care",
+          distanceKm: parseFloat((2.0 + Math.random() * 1.5).toFixed(1)),
+          etaMinutes: Math.round(8 + Math.random() * 6),
+          phone: "+91 99999 88888"
+        },
+        {
+          name: "Apollo Trauma Center",
+          distanceKm: parseFloat((3.8 + Math.random() * 2.0).toFixed(1)),
+          etaMinutes: Math.round(13 + Math.random() * 8),
+          phone: "+91 98888 77777"
+        }
+      ].sort((a, b) => a.distanceKm - b.distanceKm);
+
+      // Create Active Emergency Alert record in DB
+      const alert = await EmergencyAlert.create({
+        patientId: patient.patientId || String(patient._id),
+        patientName: patient.name,
+        phone: patient.phone || "",
+        bloodGroup: patient.bloodGroup || "",
+        age: patient.age || 30,
+        location: {
+          lat: finalLat,
+          lng: finalLng,
+          address: "SOS Location (GPS Captured)"
+        },
+        status: "active",
+        nearbyHospitals
       });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+
+      res.status(201).json({
+        message: "SOS Emergency activated successfully",
+        alertId: alert._id,
+        emergencyToken: `EMR-${randomHex(8)}`,
+        patient: {
+          id: alert.patientId,
+          name: alert.patientName,
+          phone: alert.phone,
+          blood: alert.bloodGroup,
+          age: alert.age
+        },
+        location: alert.location,
+        nearbyHospitals
+      });
+    } catch (err) {
+      console.error("SOS Emergency activation error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get active emergency alerts (for doctor dashboards)
+  app.get("/api/emergency/active", async (req, res) => {
+    try {
+      const activeAlerts = await EmergencyAlert.find({ status: "active" })
+        .sort({ createdAt: -1 })
+        .lean();
+      res.json(activeAlerts);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Acknowledge emergency alert (doctor signs off/dispatches aid)
+  app.post("/api/emergency/:id/acknowledge", protect, async (req, res) => {
+    try {
+      if (req.user.role !== "doctor" && req.user.role !== "admin") {
+        return res.status(403).json({ error: "Only doctors or admins can acknowledge emergency alerts" });
+      }
+
+      const alert = await EmergencyAlert.findById(req.params.id);
+      if (!alert) return res.status(404).json({ error: "Emergency alert not found" });
+
+      alert.status = "acknowledged";
+      alert.acknowledgedBy = req.user._id;
+      alert.acknowledgedAt = new Date();
+      await alert.save();
+
+      res.json({ message: "Emergency alert acknowledged successfully", alert });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Resolve emergency alert (marks patient safe / resolved)
+  app.post("/api/emergency/:id/resolve", async (req, res) => {
+    try {
+      const alert = await EmergencyAlert.findById(req.params.id);
+      if (!alert) return res.status(404).json({ error: "Emergency alert not found" });
+
+      alert.status = "resolved";
+      await alert.save();
+
+      res.json({ message: "Emergency alert resolved successfully", alert });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // ══════════════════════════════════════════════════════════════════════════

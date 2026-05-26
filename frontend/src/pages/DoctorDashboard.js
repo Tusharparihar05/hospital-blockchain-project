@@ -1815,6 +1815,57 @@ function MyProfileView({ doctor: doc, onUpdateProfile, licenseVerification, onLi
   );
 }
 
+let emergencyOscillators = [];
+let alarmAudioCtx = null;
+
+function startEmergencyAlarm() {
+  try {
+    if (alarmAudioCtx) return;
+    alarmAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    
+    const osc = alarmAudioCtx.createOscillator();
+    const gain = alarmAudioCtx.createGain();
+    
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(800, alarmAudioCtx.currentTime);
+    
+    const lfo = alarmAudioCtx.createOscillator();
+    lfo.frequency.value = 2; // 2 Hz sweep rate
+    
+    const lfoGain = alarmAudioCtx.createGain();
+    lfoGain.gain.value = 200; // sweep +/- 200 Hz
+    
+    lfo.connect(lfoGain);
+    lfoGain.connect(osc.frequency);
+    
+    osc.connect(gain);
+    gain.connect(alarmAudioCtx.destination);
+    
+    gain.gain.setValueAtTime(0.15, alarmAudioCtx.currentTime);
+    
+    osc.start();
+    lfo.start();
+    
+    emergencyOscillators = [osc, lfo];
+  } catch (err) {
+    console.error("Failed to start AudioContext:", err);
+  }
+}
+
+function stopEmergencyAlarm() {
+  try {
+    if (!alarmAudioCtx) return;
+    emergencyOscillators.forEach(osc => {
+      try { osc.stop(); } catch (_) {}
+    });
+    alarmAudioCtx.close();
+    alarmAudioCtx = null;
+    emergencyOscillators = [];
+  } catch (err) {
+    console.error("Failed to stop AudioContext:", err);
+  }
+}
+
 // ── MAIN DOCTOR DASHBOARD ─────────────────────────────────────────────────────
 export default function DoctorDashboard() {
   const navigate = useNavigate();
@@ -1830,6 +1881,18 @@ export default function DoctorDashboard() {
   const [loadingAppts,        setLoadingAppts]        = useState(true);
   const [chainStatus,         setChainStatus]         = useState({});
   const [licenseVerification, setLicenseVerification] = useState(null);
+  const [activeEmergencies,    setActiveEmergencies]    = useState([]);
+
+  useEffect(() => {
+    if (activeEmergencies.length > 0) {
+      startEmergencyAlarm();
+    } else {
+      stopEmergencyAlarm();
+    }
+    return () => {
+      stopEmergencyAlarm();
+    };
+  }, [activeEmergencies.length]);
 
   useEffect(() => {
     if (!sessionDoctor) { navigate("/login"); return; }
@@ -1867,22 +1930,25 @@ export default function DoctorDashboard() {
       if (!quiet) setLoadingAppts(true);
       try {
         const headers = authHeaders();
-        const [pr, ar, rr, dr] = await Promise.all([
+        const [pr, ar, rr, dr, er] = await Promise.all([
           fetch(`${API}/patients`,     { headers }),
           fetch(`${API}/appointments`, { headers }),
           fetch(`${API}/records`,      { headers }),
           fetch(`${API}/doctors`),
+          fetch(`${API}/emergency/active`),
         ]);
         if (cancelled) return;
         const pts   = pr.ok ? await pr.json() : [];
         const apRaw = ar.ok ? await ar.json() : [];
         const recs  = rr.ok ? await rr.json() : [];
         const docs  = dr.ok ? await dr.json() : [];
+        const ems   = er.ok ? await er.json() : [];
         if (cancelled) return;
         setPatients(Array.isArray(pts)    ? pts   : []);
         setAppointments(Array.isArray(apRaw) ? apRaw.map(normalizeAppointment) : []);
         setReports(Array.isArray(recs)    ? recs  : []);
         setAllDoctors(Array.isArray(docs) ? docs  : []);
+        setActiveEmergencies(Array.isArray(ems) ? ems : []);
       } catch (_) {}
       finally { if (!cancelled && !quiet) setLoadingAppts(false); }
     };
@@ -1992,6 +2058,119 @@ export default function DoctorDashboard() {
           {activeView === "myprofile"    && <MyProfileView doctor={doctor} onUpdateProfile={handleUpdateProfile} licenseVerification={licenseVerification} onLicenseVerify={handleLicenseVerify} onShowToast={show} />}
         </div>
       </div>
+      
+      {activeEmergencies.length > 0 && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 10000,
+          background: "rgba(15, 5, 5, 0.96)", backdropFilter: "blur(12px)",
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          padding: 24, animation: "flashBorder 1s infinite alternate"
+        }}>
+          <style>{`
+            @keyframes flashBorder {
+              0% { box-shadow: inset 0 0 50px rgba(244, 63, 94, 0.2); }
+              100% { box-shadow: inset 0 0 100px rgba(244, 63, 94, 0.6); }
+            }
+            @keyframes pulseAlert {
+              0% { transform: scale(1); }
+              100% { transform: scale(1.05); }
+            }
+          `}</style>
+          
+          <div style={{
+            width: "100%", maxWidth: 580, background: "#0c1424",
+            border: `2px solid ${C.red}`, borderRadius: 20,
+            boxShadow: "0 25px 60px rgba(244, 63, 94, 0.4)",
+            overflow: "hidden", padding: 28, textAlign: "center"
+          }}>
+            <span style={{ fontSize: 56, display: "inline-block", animation: "pulseAlert 0.5s infinite alternate", marginBottom: 16 }}>🚨</span>
+            <h2 style={{ color: C.red, fontSize: 24, fontWeight: 900, marginBottom: 8, letterSpacing: 0.5 }}>
+              CRITICAL EMERGENCY SOS ACTIVE
+            </h2>
+            <p style={{ color: C.text, fontSize: 14, marginBottom: 24 }}>
+              An emergency distress signal has been triggered by a patient. Action required immediately!
+            </p>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 28 }}>
+              {activeEmergencies.map((em, idx) => (
+                <div key={idx} style={{
+                  background: "#161c2e", border: `1.5px solid ${C.border}`,
+                  borderRadius: 14, padding: "16px 20px", textAlign: "left"
+                }}>
+                  <p style={{ color: C.teal, fontWeight: 800, fontSize: 13, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 8 }}>
+                    Patient Profile
+                  </p>
+                  <h3 style={{ color: C.text, fontSize: 18, fontWeight: 800, marginBottom: 6 }}>{em.patientName}</h3>
+                  
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 20px" }}>
+                    <div>
+                      <span style={{ color: C.muted, fontSize: 11 }}>🩸 BLOOD GROUP</span>
+                      <p style={{ color: C.red, fontSize: 14, fontWeight: 800, marginTop: 2 }}>{em.bloodGroup || "Not Provided"}</p>
+                    </div>
+                    <div>
+                      <span style={{ color: C.muted, fontSize: 11 }}>📱 PHONE NUMBER</span>
+                      <p style={{ color: C.text, fontSize: 14, fontWeight: 700, marginTop: 2 }}>
+                        <a href={`tel:${em.phone}`} style={{ color: C.text, textDecoration: "none" }}>{em.phone || "—"}</a>
+                      </p>
+                    </div>
+                    <div>
+                      <span style={{ color: C.muted, fontSize: 11 }}>🎂 AGE</span>
+                      <p style={{ color: C.text, fontSize: 14, fontWeight: 700, marginTop: 2 }}>{em.age || "—"} Years</p>
+                    </div>
+                    <div>
+                      <span style={{ color: C.muted, fontSize: 11 }}>📍 GPS COORDINATES</span>
+                      <p style={{ color: C.text, fontSize: 12, fontFamily: "monospace", marginTop: 2 }}>
+                        {em.location?.lat?.toFixed(4)}, {em.location?.lng?.toFixed(4)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.border}`, display: "flex", gap: 10 }}>
+                    <a
+                      href={`https://www.google.com/maps/search/?api=1&query=${em.location?.lat},${em.location?.lng}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        flex: 1, textDecoration: "none", textAlign: "center",
+                        padding: "8px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700,
+                        background: C.surfaceHi, border: `1px solid ${C.borderHi}`, color: C.text
+                      }}
+                    >
+                      🗺️ Locate on Map
+                    </a>
+                    
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch(`${API}/emergency/${em._id || em.id}/acknowledge`, {
+                            method: "POST",
+                            headers: authHeaders()
+                          });
+                          if (res.ok) {
+                            setActiveEmergencies(prev => prev.filter(x => (x._id || x.id) !== (em._id || em.id)));
+                            show("✅ Emergency acknowledged & aid dispatched!");
+                          }
+                        } catch (err) {
+                          console.error("Acknowledge emergency error:", err);
+                        }
+                      }}
+                      style={{
+                        flex: 1.5, padding: "8px 12px", borderRadius: 8, border: "none",
+                        cursor: "pointer", fontSize: 12, fontWeight: 900,
+                        background: "linear-gradient(135deg, #10b981, #059669)",
+                        color: "#fff"
+                      }}
+                    >
+                      🚑 Dispatch Aid & Acknowledge
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <ToastContainer toasts={toasts} />
     </>
   );
