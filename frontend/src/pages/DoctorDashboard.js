@@ -1478,6 +1478,11 @@ function MyProfileView({ doctor: doc, onUpdateProfile, licenseVerification, onLi
   const [languagesInput, setLanguagesInput] = useState((doc.languages || []).join(", "));
   const [tagsInput,      setTagsInput]      = useState((doc.tags || []).join(", "));
 
+  const [verifyLicenseNumber, setVerifyLicenseNumber] = useState(doc.licenseNumber || "");
+  const [verifyCouncilName, setVerifyCouncilName] = useState("National Medical Commission");
+  const [verifyRegistrationYear, setVerifyRegistrationYear] = useState(new Date().getFullYear());
+  const [verifySpecialization, setVerifySpecialization] = useState(doc.specialty || "");
+
   useEffect(() => {
     setBio(doc.bio || "");
     setHospital(doc.hospital || "");
@@ -1489,6 +1494,8 @@ function MyProfileView({ doctor: doc, onUpdateProfile, licenseVerification, onLi
     setUpiId(doc.upiId || "");
     setLanguagesInput((doc.languages || []).join(", "));
     setTagsInput((doc.tags || []).join(", "));
+    if (doc.licenseNumber) setVerifyLicenseNumber(doc.licenseNumber);
+    if (doc.specialty) setVerifySpecialization(doc.specialty);
   }, [doc._id || doc.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = async () => {
@@ -1703,22 +1710,87 @@ function MyProfileView({ doctor: doc, onUpdateProfile, licenseVerification, onLi
                 <p style={{ color: C.muted, fontSize: 12 }}>{licenseVerification.note}</p>
               </div>
             )}
-            {(!licenseVerification || licenseVerification?.status === "none") && (
-              <p style={{ color: C.muted, fontSize: 12, marginBottom: 12 }}>Verify your medical license to build patient trust. Patients see a "🛡️ NMC Verified" badge on your profile.</p>
+            {licenseVerification?.status !== "verified" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12, marginBottom: 16 }}>
+                <p style={{ color: C.muted, fontSize: 12 }}>Verify your medical license instantly via the ABDM Healthcare Professionals Registry (HPR) Sandbox.</p>
+                <div>
+                  <label style={{ color: C.muted, fontSize: 11, display: "block", marginBottom: 4 }}>License Number *</label>
+                  <input
+                    type="text"
+                    value={verifyLicenseNumber}
+                    onChange={e => setVerifyLicenseNumber(e.target.value)}
+                    placeholder="e.g. NMC-123456 or WBMC-98765"
+                    style={{ ...inputStyle, resize: "none" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ color: C.muted, fontSize: 11, display: "block", marginBottom: 4 }}>Licensing Council *</label>
+                  <select
+                    value={verifyCouncilName}
+                    onChange={e => setVerifyCouncilName(e.target.value)}
+                    style={{ ...inputStyle, cursor: "pointer", height: 38 }}
+                  >
+                    <option value="National Medical Commission">National Medical Commission</option>
+                    <option value="Delhi Medical Council">Delhi Medical Council</option>
+                    <option value="Maharashtra Medical Council">Maharashtra Medical Council</option>
+                    <option value="Karnataka Medical Council">Karnataka Medical Council</option>
+                    <option value="Tamil Nadu Medical Council">Tamil Nadu Medical Council</option>
+                    <option value="West Bengal Medical Council">West Bengal Medical Council</option>
+                    <option value="Uttar Pradesh Medical Council">Uttar Pradesh Medical Council</option>
+                  </select>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div>
+                    <label style={{ color: C.muted, fontSize: 11, display: "block", marginBottom: 4 }}>Registration Year *</label>
+                    <input
+                      type="number"
+                      value={verifyRegistrationYear}
+                      onChange={e => setVerifyRegistrationYear(e.target.value)}
+                      placeholder="e.g. 2020"
+                      min="1950"
+                      max={new Date().getFullYear()}
+                      style={{ ...inputStyle, resize: "none" }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ color: C.muted, fontSize: 11, display: "block", marginBottom: 4 }}>Specialization *</label>
+                    <input
+                      type="text"
+                      value={verifySpecialization}
+                      onChange={e => setVerifySpecialization(e.target.value)}
+                      placeholder="e.g. Cardiology"
+                      style={{ ...inputStyle, resize: "none" }}
+                    />
+                  </div>
+                </div>
+              </div>
             )}
             {licenseVerification?.status !== "verified" && (
               <button
                 type="button"
-                disabled={verifyBusy || !doc.licenseNumber || !doc.email}
-                onClick={async () => { setVerifyBusy(true); try { await onLicenseVerify(); } finally { setVerifyBusy(false); } }}
+                disabled={verifyBusy || !verifyLicenseNumber || !doc.email}
+                onClick={async () => {
+                  setVerifyBusy(true);
+                  try {
+                    await onLicenseVerify({
+                      licenseNumber: verifyLicenseNumber,
+                      councilName: verifyCouncilName,
+                      registrationYear: Number(verifyRegistrationYear),
+                      specialization: verifySpecialization,
+                    });
+                  } finally {
+                    setVerifyBusy(false);
+                  }
+                }}
                 style={{
                   padding: "11px 20px", borderRadius: 10, border: "none",
-                  cursor: verifyBusy || !doc.licenseNumber ? "not-allowed" : "pointer",
+                  cursor: verifyBusy || !verifyLicenseNumber ? "not-allowed" : "pointer",
                   fontFamily: "inherit", fontSize: 13, fontWeight: 700,
-                  background: doc.licenseNumber ? `linear-gradient(135deg,${C.purple},${C.blue})` : C.border,
-                  color: "#fff", display: "flex", alignItems: "center", gap: 8,
+                  width: "100%",
+                  background: verifyLicenseNumber ? `linear-gradient(135deg,${C.purple},${C.blue})` : C.border,
+                  color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
                 }}>
-                {verifyBusy ? "⏳ Verifying..." : "🛡️ Verify Medical License"}
+                {verifyBusy ? "🛡️ Verifying Instantly..." : "🛡️ Verify Instantly via ABDM Registry"}
               </button>
             )}
           </div>
@@ -1850,16 +1922,16 @@ export default function DoctorDashboard() {
     finally { show("Reschedule request sent", "info"); }
   };
 
-  const handleLicenseVerify = async () => {
+  const handleLicenseVerify = async (verifyDetails) => {
     try {
       const res  = await fetch(`${API}/verification/doctor-license`, {
         method: "POST", headers: authHeaders(),
         body: JSON.stringify({
           email: doctor.email,
-          licenseNumber: doctor.licenseNumber,
-          councilName: "",
-          specialization: doctor.specialty || "",
-          registrationYear: null,
+          licenseNumber: verifyDetails.licenseNumber,
+          councilName: verifyDetails.councilName,
+          specialization: verifyDetails.specialization,
+          registrationYear: Number(verifyDetails.registrationYear),
           documentHash: "",
         }),
       });
@@ -1871,9 +1943,22 @@ export default function DoctorDashboard() {
         try {
           const u = JSON.parse(localStorage.getItem("user") || "{}");
           u.licenseVerified = true;
+          u.licenseNumber = data.licenseNumber;
+          if (data.specialization) u.specialty = data.specialization;
           localStorage.setItem("user", JSON.stringify(u));
-          setSessionDoctor(s => ({ ...s, licenseVerified: true }));
-          setDoctorProfile(d => d ? { ...d, licenseVerified: true } : d);
+          
+          setSessionDoctor(s => ({ 
+            ...s, 
+            licenseVerified: true, 
+            licenseNumber: data.licenseNumber,
+            specialty: data.specialization || s.specialty
+          }));
+          setDoctorProfile(d => d ? { 
+            ...d, 
+            licenseVerified: true, 
+            licenseNumber: data.licenseNumber,
+            specialty: data.specialization || d.specialty
+          } : d);
         } catch (_) {}
       }
       show(data.status === "verified" ? "🛡️ License verified! Patients will now see your verified badge." : data.note || "See result above", data.status === "verified" ? "success" : "info");

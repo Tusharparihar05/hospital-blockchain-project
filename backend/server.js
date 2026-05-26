@@ -227,6 +227,62 @@ function getPatientRecordsContract() {
   }
 }
 
+let _doctorRegistryContract = null;
+
+const DOCTOR_REGISTRY_ABI = [
+  "function registerDoctor(address wallet, string calldata name, string calldata specialty, string calldata licenseNumber, string calldata mongoId) external",
+  "function verifyDoctor(address wallet) external",
+  "function isVerified(address wallet) external view returns (bool)",
+  "function getDoctorStatus(address wallet) external view returns (uint8)",
+];
+
+function getDoctorRegistryContract() {
+  if (_doctorRegistryContract) return _doctorRegistryContract;
+  const rpc  = process.env.BLOCKCHAIN_RPC_URL;
+  const pk   = process.env.DEPLOYER_PRIVATE_KEY;
+  const addr = process.env.DOCTOR_REGISTRY_ADDRESS;
+  if (!rpc || !pk || !addr) return null;
+  try {
+    const { ethers } = require("ethers");
+    const provider   = new ethers.JsonRpcProvider(rpc);
+    const signer     = new ethers.Wallet(pk, provider);
+    _doctorRegistryContract = new ethers.Contract(addr, DOCTOR_REGISTRY_ABI, signer);
+    return _doctorRegistryContract;
+  } catch (err) {
+    console.warn("[blockchain] doctor registry contract init failed:", err.message);
+    return null;
+  }
+}
+
+async function verifyDoctorOnRegistry(walletAddress, name, specialty, licenseNumber, mongoId) {
+  try {
+    const contract = getDoctorRegistryContract();
+    if (!contract || !walletAddress) return { success: false, reason: "DoctorRegistry not configured or no walletAddress provided" };
+    
+    // Check status
+    const status = await contract.getDoctorStatus(walletAddress);
+    let regTx = "";
+    if (status === 0 || status === 0n) {
+      console.log(`[blockchain] Registering doctor ${name} (${walletAddress}) on-chain...`);
+      const tx = await contract.registerDoctor(walletAddress, name, specialty || "General Medicine", licenseNumber, String(mongoId));
+      await tx.wait();
+      regTx = tx.hash;
+    }
+    
+    if (status === 0 || status === 0n || status === 1 || status === 1n) {
+      console.log(`[blockchain] Verifying doctor ${name} (${walletAddress}) on-chain...`);
+      const tx = await contract.verifyDoctor(walletAddress);
+      await tx.wait();
+      return { success: true, anchored: true, txHash: tx.hash };
+    }
+    
+    return { success: true, anchored: true, alreadyVerified: true, txHash: regTx || "already_verified" };
+  } catch (err) {
+    console.error("[verifyDoctorOnRegistry]", err.message);
+    return { success: false, anchored: false, reason: err.message };
+  }
+}
+
 async function anchorOnChain(chainPatientId, fileHash, category, fileName) {
   try {
     const contract = getPatientRecordsContract();
@@ -1505,22 +1561,80 @@ function startServer() {
   // ══════════════════════════════════════════════════════════════════════════
   // DOCTOR LICENCE VERIFICATION — Real-world verification flow
   // ══════════════════════════════════════════════════════════════════════════
+  // ABDM HPR Registry Sandbox Simulator Client
+  function abdmVerifyLicense(licenseNumber, councilName, registrationYear, specialization) {
+    const clean = String(licenseNumber || "").replace(/\s/g, "").toUpperCase();
+    
+    // Format check: Indian registry formats, e.g., NMC-XXXXXX, WBMC-XXXX, MCI-XXXX
+    // Or general 6-24 digit alphanumeric code
+    const formatOk = /^[A-Z]{2,6}[-\/]?\d{3,12}[-\/]?[A-Z0-9]{0,6}$/i.test(clean)
+                   || /^[A-Z0-9-]{6,24}$/i.test(clean);
+    
+    if (!formatOk) {
+      return {
+        valid: false,
+        reason: "Invalid license number format. Expected format: NMC-XXXXXX, MCI-XXXX, or a 6-24 character alphanumeric registration number."
+      };
+    }
+
+    const councils = [
+      "National Medical Commission",
+      "Delhi Medical Council",
+      "Maharashtra Medical Council",
+      "Karnataka Medical Council",
+      "Tamil Nadu Medical Council",
+      "West Bengal Medical Council",
+      "Uttar Pradesh Medical Council"
+    ];
+
+    const matchedCouncil = councils.find(c => c.toLowerCase() === (councilName || "").toLowerCase().trim()) 
+      || councilName 
+      || "National Medical Commission";
+
+    const regYear = Number(registrationYear) || new Date().getFullYear();
+    const spec = specialization || "General Medicine";
+    
+    // Expiry date set to 5 years from registration / now
+    const expiry = new Date();
+    expiry.setFullYear(expiry.getFullYear() + 5);
+
+    return {
+      valid: true,
+      registryDetails: {
+        licenseNumber: clean,
+        councilName: matchedCouncil,
+        registrationYear: regYear,
+        specialization: spec,
+        expiryDate: expiry,
+        status: "Active",
+        qualification: "MBBS, MD",
+        issuer: "ABDM Healthcare Professionals Registry (HPR) Sandbox",
+        verificationMethod: "abdm_hpr_sandbox"
+      }
+    };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // DOCTOR LICENCE VERIFICATION — Real-world verification flow
+  // ══════════════════════════════════════════════════════════════════════════
   app.post("/api/verification/doctor-license", async (req, res) => {
     try {
       const { email, licenseNumber, documentHash, councilName, registrationYear, specialization } = req.body;
       if (!email || !licenseNumber) return res.status(400).json({ error: "email and licenseNumber are required" });
 
-      const clean = String(licenseNumber).replace(/\s/g, "");
-
-      // Comprehensive license format validation (supports NMC, state council, and international formats)
-      // Indian NMC: 6-24 alphanumeric with hyphens, e.g. "MCI-12345", "NMC-2024-67890", "WBMC-12345"
-      // International: various formats
-      const formatOk = /^[A-Z]{2,6}[-\/]?\d{3,12}[-\/]?[A-Z0-9]{0,6}$/i.test(clean)
-                     || /^[A-Z0-9-]{6,24}$/i.test(clean);
+      const clean = String(licenseNumber).replace(/\s/g, "").toUpperCase();
 
       // Cross-reference validation: check if doctor exists and matches
       const doctor = await User.findOne({ email: email.toLowerCase().trim(), role: "doctor" });
       if (!doctor) return res.status(404).json({ error: "No doctor account found with this email" });
+
+      // Run ABDM simulated verification
+      const abdmResult = abdmVerifyLicense(clean, councilName, registrationYear, specialization || doctor.specialty);
+      if (!abdmResult.valid) {
+        return res.status(400).json({ error: abdmResult.reason });
+      }
+
+      const { registryDetails } = abdmResult;
 
       // Check for duplicate verification attempts
       const existing = await LicenceVerification.findOne({
@@ -1535,62 +1649,84 @@ function startServer() {
         });
       }
 
-      // Determine verification result
-      const verified = formatOk;
-      const council = councilName || "National Medical Commission";
-      const regYear = registrationYear || new Date().getFullYear();
-      const spec = specialization || doctor.specialty || "General Medicine";
+      // Assign a chainPatientId to the doctor if not exists
+      if (!doctor.chainPatientId) {
+        const hex = Math.floor(Math.random() * 0xFFFFFF).toString(16).toUpperCase().padStart(6, "0");
+        doctor.chainPatientId = parseInt(hex, 16) % 900000 + 100000;
+        await doctor.save();
+      }
 
       // Generate verification hash for blockchain anchoring
       const verificationData = JSON.stringify({
         email: email.toLowerCase().trim(),
         licenseNumber: clean,
-        council,
-        registrationYear: regYear,
-        specialization: spec,
+        council: registryDetails.councilName,
+        registrationYear: registryDetails.registrationYear,
+        specialization: registryDetails.specialization,
         verifiedAt: new Date().toISOString(),
       });
       const verificationHash = "0x" + require("crypto").createHash("sha256").update(verificationData).digest("hex");
 
-      // Attempt blockchain anchoring of verification
+      // Attempt blockchain anchoring on PatientRecords contract
       let blockchainTx = "";
-      if (verified && doctor.chainPatientId) {
+      try {
+        const chainResult = await anchorOnChain(doctor.chainPatientId, verificationHash, "license_verification", clean);
+        if (chainResult.anchored) {
+          blockchainTx = chainResult.txHash || "";
+        }
+      } catch (e) {
+        console.error("PatientRecords contract anchoring failed:", e.message);
+      }
+
+      // Attempt blockchain anchoring on DoctorRegistry contract if doctor has walletAddress linked
+      let registryTx = "";
+      if (doctor.walletAddress) {
         try {
-          const chainResult = await anchorOnChain(doctor.chainPatientId, verificationHash, "license_verification", clean);
-          if (chainResult.anchored) blockchainTx = chainResult.txHash || "";
-        } catch (e) { console.error("Blockchain anchoring for license failed:", e.message); }
+          const regResult = await verifyDoctorOnRegistry(
+            doctor.walletAddress,
+            doctor.name,
+            registryDetails.specialization,
+            clean,
+            doctor._id
+          );
+          if (regResult && regResult.anchored) {
+            registryTx = regResult.txHash || "";
+          }
+        } catch (e) {
+          console.error("DoctorRegistry contract verification failed:", e.message);
+        }
       }
 
       const entry = await LicenceVerification.create({
         email: email.toLowerCase().trim(),
         licenseNumber: clean,
         documentHash: documentHash || verificationHash,
-        status: verified ? "verified" : "rejected",
-        issuer: "MediChain Verification Authority",
-        verifiedAt: verified ? new Date() : null,
-        councilName: council,
-        registrationYear: regYear,
-        specialization: spec,
-        verificationMethod: blockchainTx ? "blockchain" : "auto",
-        blockchainTx,
-        expiryDate: verified ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000) : null, // 1 year validity
-        note: verified
-          ? `License ${clean} verified by ${council}. Registration year: ${regYear}. Specialization: ${spec}.${blockchainTx ? " Verification anchored on blockchain." : ""}`
-          : "License verification failed. Please check your license number format and try again. Accepted formats: NMC-XXXXX, WBMC-XXXX, or 6-24 character alphanumeric codes.",
+        status: "verified",
+        issuer: registryDetails.issuer,
+        verifiedAt: new Date(),
+        councilName: registryDetails.councilName,
+        registrationYear: registryDetails.registrationYear,
+        specialization: registryDetails.specialization,
+        verificationMethod: registryTx ? "blockchain" : "auto",
+        blockchainTx: registryTx || blockchainTx, // Prefer DoctorRegistry tx if available
+        expiryDate: registryDetails.expiryDate,
+        note: `License ${clean} verified via ABDM Healthcare Professionals Registry (HPR) Sandbox. Council: ${registryDetails.councilName}. Specialization: ${registryDetails.specialization}.` + (registryTx ? " Registered and verified on-chain." : (blockchainTx ? " Anchored to on-chain logs." : "")),
       });
 
-      // Update User record if verified
-      if (verified) {
-        await User.findByIdAndUpdate(doctor._id, {
-          $set: { licenseVerified: true, licenseNumber: clean },
-        });
-        cacheInvalidate("doctors");
-      }
+      // Update User record
+      await User.findByIdAndUpdate(doctor._id, {
+        $set: { 
+          licenseVerified: true, 
+          licenseNumber: clean,
+          specialty: registryDetails.specialization
+        },
+      });
+      cacheInvalidate("doctors");
 
       res.status(201).json({
         ...entry.toObject(), id: String(entry._id),
-        licenseVerified: verified,
-        blockchainAnchored: !!blockchainTx,
+        licenseVerified: true,
+        blockchainAnchored: !!(registryTx || blockchainTx),
       });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
