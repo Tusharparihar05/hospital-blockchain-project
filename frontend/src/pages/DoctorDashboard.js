@@ -835,13 +835,21 @@ function DoctorUploadModal({ patient, doctor, onClose, onSuccess, onShowToast })
 }
 
 // ── PATIENTS ──────────────────────────────────────────────────────────────────
+const CATEGORY_ICONS = {
+  "Blood Test": "🩸", "X-Ray": "☢️", "MRI Scan": "🧠", "CT Scan": "📷",
+  "Ultrasound": "🔊", "ECG": "💓", "Prescription": "💊", "Diagnosis Notes": "📝",
+  "General Checkup": "🩺", "Other": "📄", "General": "📄",
+};
+
 function PatientsView({ patients, reports, doctor, onShowToast }) {
-  const [searchQuery,         setSearchQuery]         = useState("");
-  const [selectedPatient,     setSelectedPatient]     = useState(null);
-  const [showUploadModal,     setShowUploadModal]     = useState(false);
-  const [uploadTrigger,       setUploadTrigger]       = useState(0);
-  const [patientReportsLocal, setPatientReportsLocal] = useState([]);
-  const [loadingReports,      setLoadingReports]      = useState(false);
+  const [searchQuery,     setSearchQuery]     = useState("");
+  const [selectedPatient, setSelectedPatient] = useState(null);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadTrigger,   setUploadTrigger]   = useState(0);
+  const [timelineData,    setTimelineData]    = useState([]);
+  const [totalRecords,    setTotalRecords]    = useState(0);
+  const [loadingReports,  setLoadingReports]  = useState(false);
+  const [clearingId,      setClearingId]      = useState(null);
 
   const sq = searchQuery.toLowerCase().trim();
   const filtered = (patients || []).filter(p => {
@@ -856,16 +864,41 @@ function PatientsView({ patients, reports, doctor, onShowToast }) {
 
   const selectedData = (patients || []).find(p => String(p._id || p.id || p.patientId) === selectedPatient);
 
+  // Fetch timeline data
   useEffect(() => {
-    if (!selectedPatient || !selectedData) { setPatientReportsLocal([]); return; }
+    if (!selectedPatient || !selectedData) { setTimelineData([]); setTotalRecords(0); return; }
     setLoadingReports(true);
     const patId = selectedData.patientId || selectedData.id;
-    fetch(`${API}/records/${encodeURIComponent(patId)}`)
-      .then(r => r.ok ? r.json() : [])
-      .then(recs => setPatientReportsLocal(Array.isArray(recs) ? recs : []))
-      .catch(() => setPatientReportsLocal([]))
+    const token = localStorage.getItem("token");
+    fetch(`${API}/records/${encodeURIComponent(patId)}/timeline`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(r => r.ok ? r.json() : { timeline: [], totalRecords: 0 })
+      .then(data => {
+        setTimelineData(data.timeline || []);
+        setTotalRecords(data.totalRecords || 0);
+      })
+      .catch(() => { setTimelineData([]); setTotalRecords(0); })
       .finally(() => setLoadingReports(false));
   }, [selectedPatient, uploadTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clear report handler
+  const handleClearReport = async (recordId) => {
+    setClearingId(recordId);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`${API}/records/${recordId}/clear`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to clear report");
+      onShowToast(`✅ Report cleared${data.blockchain?.anchored ? " & verified on blockchain" : ""}!`);
+      setUploadTrigger(t => t + 1);
+    } catch (err) {
+      onShowToast(err.message || "Failed to clear report", "error");
+    } finally { setClearingId(null); }
+  };
 
   return (
     <div>
@@ -882,7 +915,7 @@ function PatientsView({ patients, reports, doctor, onShowToast }) {
         <h2 style={{ color: C.text, fontSize: 22, fontWeight: 800, marginBottom: 4 }}>🔍 Patient Search</h2>
         <p style={{ color: C.muted, fontSize: 14 }}>{(patients || []).length} patients in database</p>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 420px", gap: 20 }}>
         <div style={card}>
           <div style={{ position: "relative", marginBottom: 16 }}>
             <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", fontSize: 16, color: C.muted }}>🔍</span>
@@ -980,40 +1013,133 @@ function PatientsView({ patients, reports, doctor, onShowToast }) {
                   📋 Upload Report for {selectedData.name.split(" ")[0]}
                 </button>
               </div>
+
+              {/* ── Report Timeline ─────────────────────────── */}
               <div style={{ ...card, flex: 1 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-                  <h4 style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>📂 Health Reports</h4>
-                  <Badge color={C.purple}>{patientReportsLocal.length} records</Badge>
+                  <h4 style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>📂 Health Report Timeline</h4>
+                  <Badge color={C.purple}>{totalRecords} records</Badge>
                 </div>
                 {loadingReports ? (
                   <p style={{ color: C.muted, fontSize: 13, textAlign: "center", padding: "20px 0" }}>Loading...</p>
-                ) : patientReportsLocal.length === 0 ? (
+                ) : timelineData.length === 0 ? (
                   <div style={{ textAlign: "center", padding: "24px 0", color: C.muted }}>
                     <div style={{ fontSize: 28, marginBottom: 8 }}>📂</div>
                     <p>No reports yet</p>
                     <p style={{ fontSize: 12, marginTop: 4 }}>Upload the first report above</p>
                   </div>
                 ) : (
-                  <div style={{ maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
-                    {patientReportsLocal.map((r, i) => (
-                      <div key={r.id || i} style={{ padding: "12px 14px", background: C.bg, borderRadius: 10, border: `1px solid ${C.border}` }}>
-                        <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                  <div style={{ maxHeight: 500, overflowY: "auto", paddingRight: 4 }}>
+                    {timelineData.map((group, gi) => (
+                      <div key={gi}>
+                        {/* Month header */}
+                        <div style={{
+                          display: "flex", alignItems: "center", gap: 10, marginBottom: 12, marginTop: gi > 0 ? 18 : 0,
+                        }}>
                           <div style={{
-                            width: 34, height: 34, borderRadius: 8, background: `${C.blue}20`,
-                            display: "flex", alignItems: "center", justifyContent: "center",
-                            fontSize: 16, flexShrink: 0,
-                          }}>📄</div>
-                          <div style={{ flex: 1 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                              <div>
-                                <Badge color={C.purple}>{r.category}</Badge>
-                                <p style={{ color: C.text, fontSize: 12, fontWeight: 600, marginTop: 4 }}>{r.fileName}</p>
+                            width: 10, height: 10, borderRadius: "50%",
+                            background: `linear-gradient(135deg, ${C.teal}, ${C.blue})`,
+                            boxShadow: `0 0 8px ${C.teal}60`,
+                          }} />
+                          <span style={{
+                            color: C.teal, fontSize: 13, fontWeight: 700,
+                            textTransform: "uppercase", letterSpacing: 1,
+                          }}>{group.month}</span>
+                          <div style={{ flex: 1, height: 1, background: `${C.border}` }} />
+                          <span style={{ color: C.muted, fontSize: 11 }}>{group.records.length} records</span>
+                        </div>
+
+                        {/* Timeline records */}
+                        <div style={{ position: "relative", paddingLeft: 22, marginLeft: 4 }}>
+                          {/* Vertical line */}
+                          <div style={{
+                            position: "absolute", left: 4, top: 0, bottom: 0, width: 2,
+                            background: `linear-gradient(to bottom, ${C.teal}40, ${C.purple}30, ${C.border})`,
+                          }} />
+
+                          {group.records.map((rec, ri) => {
+                            const dotColor = rec.cleared ? C.green : rec.anchoredOnChain ? C.teal : C.muted;
+                            const catIcon = CATEGORY_ICONS[rec.category] || "📄";
+                            return (
+                              <div key={rec._id || ri} style={{ position: "relative", marginBottom: 12 }}>
+                                {/* Timeline dot */}
+                                <div style={{
+                                  position: "absolute", left: -20, top: 14, width: 10, height: 10,
+                                  borderRadius: "50%", background: dotColor,
+                                  border: `2px solid ${C.surface}`, boxShadow: `0 0 6px ${dotColor}50`,
+                                  zIndex: 2,
+                                }} />
+
+                                {/* Report card */}
+                                <div style={{
+                                  padding: "14px 16px", background: C.bg, borderRadius: 12,
+                                  border: `1px solid ${rec.cleared ? C.green + "30" : C.border}`,
+                                  transition: "all 0.15s",
+                                }}>
+                                  {/* Top row: category + date */}
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                                      <span style={{ fontSize: 16 }}>{catIcon}</span>
+                                      <Badge color={C.purple}>{rec.category}</Badge>
+                                      {rec.uploadedByDoctor && <Badge color={C.teal}>👨‍⚕️ Doctor</Badge>}
+                                    </div>
+                                    <span style={{ color: C.muted, fontSize: 11, whiteSpace: "nowrap" }}>{rec.uploadDate}</span>
+                                  </div>
+
+                                  {/* File name */}
+                                  <p style={{ color: C.text, fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{rec.fileName}</p>
+
+                                  {/* Doctor name */}
+                                  {rec.doctorName && rec.doctorName !== "Self Upload" && (
+                                    <p style={{ color: C.teal, fontSize: 11, marginBottom: 6 }}>Dr. {rec.doctorName}</p>
+                                  )}
+
+                                  {/* Doctor comment preview */}
+                                  {rec.doctorComment && (
+                                    <p style={{
+                                      color: C.muted, fontSize: 11, marginBottom: 8,
+                                      padding: "6px 10px", background: `${C.blue}08`,
+                                      border: `1px solid ${C.blue}15`, borderRadius: 8,
+                                      lineHeight: 1.5,
+                                    }}>
+                                      💬 {rec.doctorComment.length > 100 ? rec.doctorComment.slice(0, 100) + "..." : rec.doctorComment}
+                                    </p>
+                                  )}
+
+                                  {/* Status badges row */}
+                                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                                    {rec.anchoredOnChain ? (
+                                      <Badge color={C.green}>⛓️ On-Chain</Badge>
+                                    ) : (
+                                      <Badge color={C.muted}>⏳ Off-Chain</Badge>
+                                    )}
+                                    {rec.cleared ? (
+                                      <Badge color={C.green}>✅ Cleared{rec.clearedByName ? ` by Dr. ${rec.clearedByName}` : ""}</Badge>
+                                    ) : (
+                                      <Badge color={C.amber}>⏳ Awaiting Review</Badge>
+                                    )}
+                                  </div>
+
+                                  {/* Clear button - only for uncleared reports */}
+                                  {!rec.cleared && (
+                                    <button
+                                      onClick={() => handleClearReport(rec._id)}
+                                      disabled={clearingId === rec._id}
+                                      style={{
+                                        marginTop: 10, padding: "7px 16px", borderRadius: 8,
+                                        border: `1px solid ${C.green}50`, background: `${C.green}12`,
+                                        color: C.green, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                                        fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6,
+                                        opacity: clearingId === rec._id ? 0.6 : 1,
+                                      }}
+                                    >
+                                      {clearingId === rec._id ? "⏳ Clearing..." : "✅ Clear & Sign Off"}
+                                    </button>
+                                  )}
+                                </div>
                               </div>
-                              <span style={{ color: C.muted, fontSize: 11 }}>{r.uploadDate}</span>
-                            </div>
-                            {r.doctor          && <p style={{ color: C.teal,  fontSize: 11, marginBottom: 4 }}>Dr. {r.doctor}</p>}
-                            {r.anchoredOnChain && <p style={{ color: C.green, fontSize: 10 }}>⛓️ Blockchain verified</p>}
-                          </div>
+                            );
+                          })}
                         </div>
                       </div>
                     ))}
@@ -1028,7 +1154,7 @@ function PatientsView({ patients, reports, doctor, onShowToast }) {
             }}>
               <div style={{ fontSize: 40, marginBottom: 12 }}>👆</div>
               <p style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 8 }}>Select a patient</p>
-              <p style={{ fontSize: 13, lineHeight: 1.6 }}>Search and select a patient to view their records or upload a new report with clinical notes.</p>
+              <p style={{ fontSize: 13, lineHeight: 1.6 }}>Search and select a patient to view their report timeline or upload a new report with clinical notes.</p>
             </div>
           )}
         </div>
@@ -1504,29 +1630,67 @@ function MyProfileView({ doctor: doc, onUpdateProfile, licenseVerification, onLi
           )}
 
           <div style={{ ...card, border: `1px solid ${C.purple}33`, background: `${C.purple}07` }}>
-            <h4 style={{ color: C.text, fontWeight: 700, fontSize: 15, marginBottom: 8 }}>📜 License Verification</h4>
+            <h4 style={{ color: C.text, fontWeight: 700, fontSize: 15, marginBottom: 12 }}>🛡️ License Verification</h4>
             {licenseVerification?.status === "verified" && (
-              <p style={{ color: C.green, fontSize: 13, fontWeight: 600, marginBottom: 8 }}>✅ Verified • {licenseVerification.issuer || "Demo Medical Council"}</p>
+              <div style={{
+                padding: "14px 16px", background: `${C.green}08`,
+                border: `1px solid ${C.green}25`, borderRadius: 12, marginBottom: 12,
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 20 }}>🛡️</span>
+                  <p style={{ color: C.green, fontSize: 15, fontWeight: 700 }}>License Verified</p>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  {[
+                    { label: "License #", value: licenseVerification.licenseNumber || doc.licenseNumber },
+                    { label: "Council", value: licenseVerification.councilName || "National Medical Commission" },
+                    { label: "Specialization", value: licenseVerification.specialization || doc.specialty || "General" },
+                    { label: "Reg. Year", value: licenseVerification.registrationYear || "—" },
+                  ].map(r => (
+                    <div key={r.label} style={{ padding: "6px 0" }}>
+                      <p style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>{r.label}</p>
+                      <p style={{ color: C.text, fontSize: 13, fontWeight: 600 }}>{r.value}</p>
+                    </div>
+                  ))}
+                </div>
+                {licenseVerification.blockchainTx && (
+                  <div style={{ marginTop: 8, padding: "6px 10px", background: `${C.teal}10`, borderRadius: 8, border: `1px solid ${C.teal}20` }}>
+                    <p style={{ color: C.teal, fontSize: 11, fontWeight: 600 }}>⛓️ Verification anchored on blockchain</p>
+                    <p style={{ color: C.muted, fontSize: 10, fontFamily: "monospace", marginTop: 2 }}>{licenseVerification.blockchainTx.slice(0, 20)}...</p>
+                  </div>
+                )}
+                {licenseVerification.expiryDate && (
+                  <p style={{ color: C.muted, fontSize: 11, marginTop: 8 }}>📅 Valid until: {new Date(licenseVerification.expiryDate).toLocaleDateString()}</p>
+                )}
+              </div>
             )}
             {licenseVerification?.status === "rejected" && (
-              <p style={{ color: C.red, fontSize: 13, marginBottom: 8 }}>❌ Rejected: {licenseVerification.note}</p>
+              <div style={{
+                padding: "12px 16px", background: `${C.red}08`,
+                border: `1px solid ${C.red}25`, borderRadius: 12, marginBottom: 12,
+              }}>
+                <p style={{ color: C.red, fontSize: 13, fontWeight: 600, marginBottom: 4 }}>❌ Verification Failed</p>
+                <p style={{ color: C.muted, fontSize: 12 }}>{licenseVerification.note}</p>
+              </div>
             )}
             {(!licenseVerification || licenseVerification?.status === "none") && (
-              <p style={{ color: C.muted, fontSize: 12, marginBottom: 8 }}>Not submitted yet.</p>
+              <p style={{ color: C.muted, fontSize: 12, marginBottom: 12 }}>Verify your medical license to build patient trust. Patients see a "🛡️ NMC Verified" badge on your profile.</p>
             )}
-            <button
-              type="button"
-              disabled={verifyBusy || !doc.licenseNumber || !doc.email}
-              onClick={async () => { setVerifyBusy(true); try { await onLicenseVerify(); } finally { setVerifyBusy(false); } }}
-              style={{
-                padding: "10px 16px", borderRadius: 8, border: "none",
-                cursor: verifyBusy || !doc.licenseNumber ? "not-allowed" : "pointer",
-                fontFamily: "inherit", fontSize: 13, fontWeight: 600,
-                background: doc.licenseNumber ? `linear-gradient(135deg,${C.purple},${C.blue})` : C.border,
-                color: "#fff",
-              }}>
-              {verifyBusy ? "Submitting…" : "Submit License for Verification"}
-            </button>
+            {licenseVerification?.status !== "verified" && (
+              <button
+                type="button"
+                disabled={verifyBusy || !doc.licenseNumber || !doc.email}
+                onClick={async () => { setVerifyBusy(true); try { await onLicenseVerify(); } finally { setVerifyBusy(false); } }}
+                style={{
+                  padding: "11px 20px", borderRadius: 10, border: "none",
+                  cursor: verifyBusy || !doc.licenseNumber ? "not-allowed" : "pointer",
+                  fontFamily: "inherit", fontSize: 13, fontWeight: 700,
+                  background: doc.licenseNumber ? `linear-gradient(135deg,${C.purple},${C.blue})` : C.border,
+                  color: "#fff", display: "flex", alignItems: "center", gap: 8,
+                }}>
+                {verifyBusy ? "⏳ Verifying..." : "🛡️ Verify Medical License"}
+              </button>
+            )}
           </div>
 
           <div style={{ ...card, background: `${C.teal}07`, border: `1px solid ${C.teal}25` }}>
@@ -1660,12 +1824,29 @@ export default function DoctorDashboard() {
     try {
       const res  = await fetch(`${API}/verification/doctor-license`, {
         method: "POST", headers: authHeaders(),
-        body: JSON.stringify({ email: doctor.email, licenseNumber: doctor.licenseNumber, documentHash: "" }),
+        body: JSON.stringify({
+          email: doctor.email,
+          licenseNumber: doctor.licenseNumber,
+          councilName: "",
+          specialization: doctor.specialty || "",
+          registrationYear: null,
+          documentHash: "",
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Verification failed");
       setLicenseVerification(data);
-      show(data.status === "verified" ? "✅ License verified!" : data.note || "See result above", data.status === "verified" ? "success" : "info");
+      if (data.licenseVerified) {
+        // Update local storage so the badge shows immediately
+        try {
+          const u = JSON.parse(localStorage.getItem("user") || "{}");
+          u.licenseVerified = true;
+          localStorage.setItem("user", JSON.stringify(u));
+          setSessionDoctor(s => ({ ...s, licenseVerified: true }));
+          setDoctorProfile(d => d ? { ...d, licenseVerified: true } : d);
+        } catch (_) {}
+      }
+      show(data.status === "verified" ? "🛡️ License verified! Patients will now see your verified badge." : data.note || "See result above", data.status === "verified" ? "success" : "info");
     } catch (e) { show(e.message, "error"); }
   };
 

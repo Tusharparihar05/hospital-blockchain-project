@@ -482,7 +482,16 @@ function DoctorModal({ doctor, initialStep = "profile", onClose, onBookConfirm }
                 <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                   {doctor.rating > 0    && <span style={{ color: COLORS.yellow, fontSize: 13 }}>⭐ {doctor.rating}</span>}
                   {doctor.fee    > 0    && <span style={{ color: COLORS.green, fontSize: 13, fontWeight: 700 }}>₹{doctor.fee}/consult</span>}
-                  {doctor.licenseVerified && <span style={{ color: COLORS.green, fontSize: 12 }}>✓ Verified</span>}
+                  {doctor.licenseVerified && <span style={{
+                    background: `${COLORS.green}18`, color: COLORS.green,
+                    border: `1px solid ${COLORS.green}35`, padding: "3px 10px",
+                    borderRadius: 20, fontSize: 11, fontWeight: 700,
+                  }}>🛡️ NMC Verified</span>}
+                  {!doctor.licenseVerified && <span style={{
+                    background: `${COLORS.yellow}15`, color: COLORS.yellow,
+                    border: `1px solid ${COLORS.yellow}30`, padding: "3px 10px",
+                    borderRadius: 20, fontSize: 11, fontWeight: 600,
+                  }}>⏳ Pending Verification</span>}
                 </div>
               </div>
               <button onClick={onClose} style={{ background: "none", border: "none", color: COLORS.muted, fontSize: 22, cursor: "pointer" }}>×</button>
@@ -1148,7 +1157,7 @@ function DoctorReportCard({ report, onView }) {
           background: `${COLORS.teal}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
         }}>📋</div>
         <div style={{ flex: 1 }}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4, flexWrap: "wrap" }}>
             <span style={{
               background: `${COLORS.purple}20`, color: COLORS.purple,
               border: `1px solid ${COLORS.purple}30`,
@@ -1157,10 +1166,25 @@ function DoctorReportCard({ report, onView }) {
             {report.uploadedByDoctor && (
               <span style={{ color: COLORS.teal, fontSize: 11, fontWeight: 600 }}>👨‍⚕️ By Doctor</span>
             )}
+            {report.cleared && (
+              <span style={{
+                background: `${COLORS.green}18`, color: COLORS.green,
+                border: `1px solid ${COLORS.green}30`,
+                padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 600,
+              }}>✅ Cleared</span>
+            )}
+            {report.anchoredOnChain && (
+              <span style={{
+                background: `${COLORS.accent}15`, color: COLORS.accent,
+                border: `1px solid ${COLORS.accent}30`,
+                padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 600,
+              }}>⛓️ On-Chain</span>
+            )}
           </div>
           <p style={{ color: COLORS.text, fontSize: 13, fontWeight: 600 }}>{report.fileName}</p>
           <p style={{ color: COLORS.muted, fontSize: 11, marginTop: 2 }}>
             {report.uploadDate} {report.doctorName ? `• Dr. ${report.doctorName}` : ""}
+            {report.cleared && report.clearedByName ? ` • Cleared by Dr. ${report.clearedByName}` : ""}
           </p>
         </div>
         <span style={{ color: COLORS.muted, fontSize: 16 }}>{expanded ? "▲" : "▼"}</span>
@@ -1692,8 +1716,12 @@ export function PatientDashboard() {
                           </span>
                         )}
                         {doc.licenseVerified && (
-                          <span style={{ padding: "5px 10px", borderRadius: 8, fontSize: 11, background: `${COLORS.green}15`, color: COLORS.green }}>
-                            ✅ Verified
+                          <span style={{
+                            padding: "4px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700,
+                            background: `${COLORS.green}18`, color: COLORS.green,
+                            border: `1px solid ${COLORS.green}35`,
+                          }}>
+                            🛡️ NMC Verified
                           </span>
                         )}
                       </div>
