@@ -1608,6 +1608,65 @@ function startServer() {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // Public route to lookup verification by license number or email or doctor name
+  app.get("/api/verification/lookup", async (req, res) => {
+    try {
+      const { query } = req.query;
+      if (!query) return res.status(400).json({ error: "Query parameter is required" });
+      const term = String(query).trim();
+
+      // Find in LicenceVerification
+      let verification = await LicenceVerification.findOne({
+        $or: [
+          { licenseNumber: { $regex: new RegExp("^" + term.replace(/\s/g, ""), "i") } },
+          { email: { $regex: new RegExp("^" + term, "i") } }
+        ]
+      }).sort({ createdAt: -1 }).lean();
+
+      let doctorUser = null;
+      if (verification) {
+        doctorUser = await User.findOne({ email: verification.email, role: "doctor" }).select("name email specialty profilePicture").lean();
+      } else {
+        // Search by doctor name in User schema
+        doctorUser = await User.findOne({
+          name: { $regex: new RegExp(term, "i") },
+          role: "doctor"
+        }).select("name email licenseNumber specialty licenseVerified profilePicture").lean();
+        
+        if (doctorUser) {
+          verification = await LicenceVerification.findOne({ email: doctorUser.email }).sort({ createdAt: -1 }).lean();
+        }
+      }
+
+      if (!verification && !doctorUser) {
+        return res.status(404).json({ error: "No matching verified doctor or license found" });
+      }
+
+      res.json({
+        found: true,
+        doctor: doctorUser ? {
+          name: doctorUser.name,
+          email: doctorUser.email,
+          specialty: doctorUser.specialty || doctorUser.specialization || "General Medicine",
+          licenseVerified: doctorUser.licenseVerified || (verification?.status === "verified")
+        } : null,
+        verification: verification ? {
+          licenseNumber: verification.licenseNumber,
+          status: verification.status,
+          councilName: verification.councilName || "National Medical Commission",
+          registrationYear: verification.registrationYear,
+          specialization: verification.specialization,
+          verifiedAt: verification.verifiedAt,
+          expiryDate: verification.expiryDate,
+          blockchainTx: verification.blockchainTx || "",
+          verificationMethod: verification.verificationMethod || "auto",
+          note: verification.note,
+          isExpired: verification.expiryDate ? new Date() > new Date(verification.expiryDate) : false,
+        } : null
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // Quick verification status check for any doctor
   app.get("/api/verification/status/:doctorId", async (req, res) => {
     try {

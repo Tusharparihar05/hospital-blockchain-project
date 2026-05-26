@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useState } from "react";
 
 const COLORS = {
   bg: "#0a0f1e", card: "#0f1729", cardBorder: "#1a2540",
@@ -61,6 +62,32 @@ const footerLinks = {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function LandingPage() {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResult, setSearchResult] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+
+  const handleSearch = async (e) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    setSearchError("");
+    setSearchResult(null);
+    try {
+      const API = process.env.REACT_APP_API_URL || "http://localhost:5000/api";
+      const res = await fetch(`${API}/verification/lookup?query=${encodeURIComponent(searchQuery.trim())}`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Search failed");
+      }
+      setSearchResult(data);
+    } catch (err) {
+      setSearchError(err.message || "No verified doctor or license found matching your search term.");
+    } finally {
+      setSearching(false);
+    }
+  };
+
   return (
     <div style={{ background: COLORS.bg, minHeight: "100vh", fontFamily: "'Segoe UI', system-ui, sans-serif", color: COLORS.text }}>
       <style>{`
@@ -209,6 +236,132 @@ export default function LandingPage() {
               <div style={{ color: COLORS.muted, fontSize: 13, marginTop: 6 }}>{s.label}</div>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* ── Public License Verification Lookup ─────────────────────────────── */}
+      <section style={{ padding: "0 48px 80px", background: COLORS.bg }}>
+        <div style={{
+          maxWidth: 860, margin: "0 auto", background: `${COLORS.card}`,
+          border: `1px solid ${COLORS.cardBorder}`, borderRadius: 24, padding: "40px 32px",
+          boxShadow: `0 8px 32px rgba(0, 0, 0, 0.4)`
+        }}>
+          <div style={{ textAlign: "center", marginBottom: 28 }}>
+            <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 8, color: COLORS.text }}>
+              🛡️ Public Medical License Registry
+            </h2>
+            <p style={{ color: COLORS.muted, fontSize: 14 }}>
+              Verify doctor credentials, active licensing councils, and blockchain proof status in real-time.
+            </p>
+          </div>
+
+          <form onSubmit={handleSearch} style={{ display: "flex", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by doctor name, email, or license number (e.g. NMC-2024-67890)"
+              style={{
+                flex: 1, minWidth: 280, background: COLORS.bg, border: `1px solid ${COLORS.cardBorder}`,
+                color: COLORS.text, padding: "12px 18px", borderRadius: 10, fontSize: 14,
+                outline: "none", transition: "border-color 0.2s"
+              }}
+              onFocus={(e) => e.target.style.borderColor = COLORS.accent}
+              onBlur={(e) => e.target.style.borderColor = COLORS.cardBorder}
+            />
+            <button
+              type="submit"
+              disabled={searching || !searchQuery.trim()}
+              style={{
+                padding: "12px 24px", borderRadius: 10, border: "none",
+                background: searchQuery.trim() ? `linear-gradient(135deg, ${COLORS.accent}, ${COLORS.accent2})` : COLORS.cardBorder,
+                color: "#fff", fontWeight: 700, fontSize: 14, cursor: searchQuery.trim() && !searching ? "pointer" : "not-allowed",
+                transition: "opacity 0.2s"
+              }}
+            >
+              {searching ? "⏳ Searching..." : "🔍 Search Registry"}
+            </button>
+          </form>
+
+          {searching && (
+            <div style={{ textAlign: "center", padding: "20px 0", color: COLORS.muted }}>
+              <div style={{ fontSize: 24, marginBottom: 8 }}>⛓️</div>
+              <p style={{ fontSize: 13 }}>Querying database & verifying signature anchors...</p>
+            </div>
+          )}
+
+          {searchError && (
+            <div style={{
+              padding: "16px 20px", background: `${COLORS.red}0d`, border: `1px solid ${COLORS.red}25`,
+              borderRadius: 12, color: COLORS.red, fontSize: 13, display: "flex", gap: 10, alignItems: "center"
+            }}>
+              <span>⚠️</span>
+              <div>
+                <p style={{ fontWeight: 700, marginBottom: 2 }}>Verification Lookup Failed</p>
+                <p style={{ color: COLORS.muted }}>{searchError}</p>
+              </div>
+            </div>
+          )}
+
+          {searchResult && searchResult.found && (
+            <div style={{
+              background: "rgba(16, 185, 129, 0.04)", border: `1px solid ${COLORS.green}25`,
+              borderRadius: 16, padding: "24px 20px", marginTop: 10
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
+                <div>
+                  <h3 style={{ color: COLORS.text, fontSize: 20, fontWeight: 800, display: "flex", alignItems: "center", gap: 8 }}>
+                    👨‍⚕️ {searchResult.doctor?.name || "Registered Professional"}
+                  </h3>
+                  <p style={{ color: COLORS.muted, fontSize: 13, marginTop: 4 }}>
+                    {searchResult.doctor?.specialty} • {searchResult.doctor?.email}
+                  </p>
+                </div>
+                <div style={{
+                  background: `${COLORS.green}15`, color: COLORS.green, border: `1px solid ${COLORS.green}30`,
+                  padding: "6px 14px", borderRadius: 20, fontSize: 12, fontWeight: 800,
+                  display: "flex", alignItems: "center", gap: 6
+                }}>
+                  <span>🛡️</span> NMC VERIFIED
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16, borderTop: `1px solid ${COLORS.cardBorder}`, paddingTop: 18 }}>
+                {[
+                  { label: "License Number", value: searchResult.verification?.licenseNumber },
+                  { label: "Licensing Council", value: searchResult.verification?.councilName },
+                  { label: "Registration Year", value: searchResult.verification?.registrationYear || "—" },
+                  { label: "Validity", value: searchResult.verification?.expiryDate ? `Valid until ${new Date(searchResult.verification.expiryDate).toLocaleDateString()}` : "Active" }
+                ].map(item => (
+                  <div key={item.label}>
+                    <p style={{ color: COLORS.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>{item.label}</p>
+                    <p style={{ color: COLORS.text, fontSize: 13, fontWeight: 600, marginTop: 4 }}>{item.value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {searchResult.verification?.blockchainTx && (
+                <div style={{
+                  marginTop: 20, padding: 14, background: `${COLORS.accent}0a`,
+                  border: `1px solid ${COLORS.accent}20`, borderRadius: 12
+                }}>
+                  <p style={{ color: COLORS.accent, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>⛓️</span> Cryptographic Proof Anchored On-Chain
+                  </p>
+                  <p style={{ color: COLORS.muted, fontSize: 11, lineHeight: 1.5, marginTop: 6 }}>
+                    This licensing record was cryptographically hashed and permanently written to the blockchain. If any credential details are altered, the verification signature will break.
+                  </p>
+                  <div style={{
+                    marginTop: 10, background: COLORS.bg, padding: "8px 12px", borderRadius: 8,
+                    border: `1px solid ${COLORS.cardBorder}`, fontFamily: "monospace", fontSize: 10,
+                    color: COLORS.muted, wordBreak: "break-all"
+                  }}>
+                    TX: {searchResult.verification.blockchainTx}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </section>
 
