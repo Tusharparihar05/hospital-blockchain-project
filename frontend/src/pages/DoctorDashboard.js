@@ -117,12 +117,121 @@ function ApptStatusBadge({ status, isEmergency }) {
   const map = {
     confirmed:    { color: C.blue,   label: "Confirmed" },
     "in-progress": { color: C.teal,  label: "● In Progress" },
-    pending:      { color: C.amber,  label: "Pending" },
+    pending:      { color: C.amber,  label: "⏳ Pending Verification" },
     scheduled:    { color: C.blue,   label: "Scheduled" },
     completed:    { color: C.green,  label: "✓ Completed" },
   };
   const m = map[status] || { color: C.muted, label: status };
   return <Badge color={m.color}>{m.label}</Badge>;
+}
+
+// ── Payment Proof Modal ──────────────────────────────────────────────────────
+function PaymentProofModal({ appointment, onApprove, onReject, onClose }) {
+  if (!appointment) return null;
+  const screenshot = appointment.paymentScreenshot || "";
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 2000, background: "rgba(4,8,15,0.92)",
+      backdropFilter: "blur(10px)", display: "flex", alignItems: "center",
+      justifyContent: "center", padding: 24,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width: "100%", maxWidth: 560, maxHeight: "92vh", overflowY: "auto",
+        background: C.surface, border: `1px solid ${C.amber}40`, borderRadius: 20,
+        boxShadow: `0 32px 80px #000000cc, 0 0 0 1px ${C.amber}15`,
+      }}>
+        {/* Header */}
+        <div style={{
+          background: `linear-gradient(135deg,${C.amber}20,${C.amber}08)`,
+          borderBottom: `1px solid ${C.border}`, padding: "20px 24px",
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+        }}>
+          <div>
+            <h3 style={{ color: C.text, fontSize: 17, fontWeight: 800, marginBottom: 4 }}>🔍 Payment Proof Review</h3>
+            <p style={{ color: C.muted, fontSize: 12 }}>Review the payment screenshot before approving</p>
+          </div>
+          <button onClick={onClose} style={{
+            width: 32, height: 32, borderRadius: 8, background: C.surfaceHi,
+            border: `1px solid ${C.border}`, color: C.muted, fontSize: 16, cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>✕</button>
+        </div>
+
+        {/* Patient & Appointment Info */}
+        <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            {[
+              { label: "Patient", value: appointment.patientName },
+              { label: "Date & Time", value: `${appointment.date} at ${appointment.time}` },
+              { label: "Type", value: appointment.type || "Consultation" },
+              { label: "Fee", value: `₹${appointment.fee || 0}` },
+            ].map(r => (
+              <div key={r.label} style={{ padding: "8px 12px", background: C.bg, borderRadius: 8, border: `1px solid ${C.border}` }}>
+                <p style={{ color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 3 }}>{r.label}</p>
+                <p style={{ color: C.text, fontSize: 13, fontWeight: 600 }}>{r.value}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Screenshot */}
+        <div style={{ padding: "20px 24px" }}>
+          <p style={{ color: C.text, fontSize: 13, fontWeight: 700, marginBottom: 12 }}>📸 Payment Screenshot</p>
+          {screenshot ? (
+            <div style={{
+              background: C.bg, borderRadius: 12, border: `1px solid ${C.border}`,
+              padding: 12, textAlign: "center",
+            }}>
+              <img
+                src={screenshot}
+                alt="Payment proof"
+                style={{
+                  maxWidth: "100%", maxHeight: 400, objectFit: "contain",
+                  borderRadius: 8, cursor: "pointer",
+                }}
+                onClick={() => window.open(screenshot, "_blank")}
+              />
+              <p style={{ color: C.muted, fontSize: 11, marginTop: 8 }}>Click image to view full size in new tab</p>
+            </div>
+          ) : (
+            <div style={{
+              background: `${C.red}10`, border: `1px solid ${C.red}30`, borderRadius: 12,
+              padding: "24px 16px", textAlign: "center",
+            }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>⚠️</div>
+              <p style={{ color: C.red, fontSize: 13, fontWeight: 600 }}>No payment screenshot was uploaded</p>
+              <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>The patient did not submit payment proof</p>
+            </div>
+          )}
+        </div>
+
+        {/* Action Buttons */}
+        <div style={{
+          padding: "16px 24px 24px", display: "flex", gap: 12,
+          borderTop: `1px solid ${C.border}`,
+        }}>
+          <button
+            onClick={() => { onReject(appointment); onClose(); }}
+            style={{
+              flex: 1, padding: 14, borderRadius: 12, fontSize: 14, fontWeight: 700,
+              background: `${C.red}15`, border: `1px solid ${C.red}40`, color: C.red,
+              cursor: "pointer", transition: "all 0.2s",
+            }}
+          >✕ Reject Payment</button>
+          <button
+            onClick={() => { onApprove(appointment); onClose(); }}
+            disabled={!screenshot}
+            style={{
+              flex: 1, padding: 14, borderRadius: 12, fontSize: 14, fontWeight: 700,
+              background: screenshot ? `linear-gradient(135deg,${C.green},${C.teal})` : C.border,
+              border: "none", color: screenshot ? "#fff" : C.muted,
+              cursor: screenshot ? "pointer" : "not-allowed", transition: "all 0.2s",
+            }}
+          >✅ Approve Payment</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 };
@@ -248,7 +357,7 @@ function TopBar({ activeView, setActiveView, doctor, onLogout }) {
 }
 
 // ── OVERVIEW ──────────────────────────────────────────────────────────────────
-function OverviewView({ appointments, patients, reports, loadingAppts, chainStatus, onCompleteAppt, onReschedule, setActiveView, doctor }) {
+function OverviewView({ appointments, patients, reports, loadingAppts, chainStatus, onCompleteAppt, onReschedule, onVerifyPayment, setActiveView, doctor }) {
   const todayStr       = isoToday();
   const todayAppts     = appointments.filter(a => a.date === todayStr);
   const emergencyCount = appointments.filter(a => a.isEmergency).length;
@@ -348,17 +457,24 @@ function OverviewView({ appointments, patients, reports, loadingAppts, chainStat
                               fontSize: 11, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
                               background: "transparent", border: `1px solid ${C.border}`, color: C.mutedHi,
                             }}>↺ Reschedule</button>
-                            <button
-                              onClick={() => onCompleteAppt(appt)}
-                              disabled={chainStatus[appt.id] === "minting" || appt.status === "completed"}
-                              style={{
+                            {appt.status === "pending" && appt.paymentMethod === "upi" ? (
+                              <button onClick={() => onVerifyPayment(appt)} style={{
                                 fontSize: 11, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
-                                border: "none",
-                                background: appt.status === "completed" ? `${C.green}22` : `linear-gradient(135deg,${C.teal},${C.blue})`,
-                                color: appt.status === "completed" ? C.green : "#fff", fontWeight: 600,
-                              }}>
-                              {chainStatus[appt.id] === "minting" ? "⛓️ Minting…" : appt.status === "completed" ? "✓ Done" : "✓ Complete"}
-                            </button>
+                                border: "none", background: `linear-gradient(135deg,${C.amber},${C.amber}cc)`, color: "#000", fontWeight: 600,
+                              }}>🔍 View Proof</button>
+                            ) : (
+                              <button
+                                onClick={() => onCompleteAppt(appt)}
+                                disabled={chainStatus[appt.id] === "minting" || appt.status === "completed"}
+                                style={{
+                                  fontSize: 11, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+                                  border: "none",
+                                  background: appt.status === "completed" ? `${C.green}22` : `linear-gradient(135deg,${C.teal},${C.blue})`,
+                                  color: appt.status === "completed" ? C.green : "#fff", fontWeight: 600,
+                                }}>
+                                {chainStatus[appt.id] === "minting" ? "⛓️ Minting…" : appt.status === "completed" ? "✓ Done" : "✓ Complete"}
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -496,7 +612,7 @@ function DoctorsView({ allDoctors }) {
 }
 
 // ── APPOINTMENTS ──────────────────────────────────────────────────────────────
-function AppointmentsView({ appointments, chainStatus, onCompleteAppt, onReschedule }) {
+function AppointmentsView({ appointments, chainStatus, onCompleteAppt, onReschedule, onVerifyPayment }) {
   const [filterDate,   setFilterDate]   = useState("today");
   const [filterStatus, setFilterStatus] = useState("all");
   const [search,       setSearch]       = useState("");
@@ -598,7 +714,14 @@ function AppointmentsView({ appointments, chainStatus, onCompleteAppt, onResched
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-end" }}>
                         <ApptStatusBadge status={apt.status} isEmergency={apt.isEmergency} />
-                        {apt.status !== "completed" && (
+                        {apt.status === "pending" && apt.paymentMethod === "upi" ? (
+                          <div style={{ display: "flex", gap: 5 }}>
+                            <button onClick={e => { e.stopPropagation(); onVerifyPayment(apt); }} style={{
+                              fontSize: 10, padding: "3px 8px", borderRadius: 5, cursor: "pointer",
+                              border: "none", background: `linear-gradient(135deg,${C.amber},${C.amber}cc)`, color: "#000", fontWeight: 700,
+                            }}>🔍 View Proof</button>
+                          </div>
+                        ) : apt.status !== "completed" ? (
                           <div style={{ display: "flex", gap: 5 }}>
                             <button
                               onClick={e => { e.stopPropagation(); onReschedule(apt); }}
@@ -617,7 +740,7 @@ function AppointmentsView({ appointments, chainStatus, onCompleteAppt, onResched
                               {chainStatus[apt.id] === "minting" ? "⛓️…" : "✓"}
                             </button>
                           </div>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -1882,6 +2005,7 @@ export default function DoctorDashboard() {
   const [chainStatus,         setChainStatus]         = useState({});
   const [licenseVerification, setLicenseVerification] = useState(null);
   const [activeEmergencies,    setActiveEmergencies]    = useState([]);
+  const [proofAppt,           setProofAppt]           = useState(null);
 
   useEffect(() => {
     if (activeEmergencies.length > 0) {
@@ -1893,6 +2017,7 @@ export default function DoctorDashboard() {
       stopEmergencyAlarm();
     };
   }, [activeEmergencies.length]);
+
 
   useEffect(() => {
     if (!sessionDoctor) { navigate("/login"); return; }
@@ -1962,15 +2087,11 @@ export default function DoctorDashboard() {
   const handleCompleteAppt = async (appt) => {
     setChainStatus(s => ({ ...s, [appt.id]: "minting" }));
     try {
-      // Mark appointment complete (DB + in-memory queue)
       await fetch(`${API}/appointments/${appt.id}/complete`, { method: "PUT", headers: authHeaders() }).catch(() => {});
-      // Also explicitly call queue/complete for guaranteed in-memory queue sync
       const doctorId = doctor?._id || doctor?.id;
       if (doctorId) {
         await fetch(`${API_FULL}/api/queue/complete/${appt.id}`, {
-          method: "POST",
-          headers: authHeaders(),
-          body: JSON.stringify({ doctorId, date: isoToday() }),
+          method: "POST", headers: authHeaders(), body: JSON.stringify({ doctorId, date: isoToday() }),
         }).catch(() => {});
       }
       setChainStatus(s => ({ ...s, [appt.id]: "done" }));
@@ -1981,6 +2102,34 @@ export default function DoctorDashboard() {
       show(`Marked complete. Blockchain: ${err.message}`, "info");
       setAppointments(prev => prev.map(a => a.id === appt.id ? { ...a, status: "completed" } : a));
     }
+  };
+
+  const handleVerifyPayment = async (appt) => {
+    try {
+      const res = await fetch(`${API}/appointments/${appt.id}/verify-payment`, { method: "PUT", headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Verification failed");
+      show("✅ Payment verified & appointment confirmed!");
+      setAppointments(prev => prev.map(a => a.id === appt.id ? { ...a, status: "confirmed", feePaid: true } : a));
+    } catch (e) {
+      show(e.message, "error");
+    }
+  };
+
+  const handleRejectPayment = async (appt) => {
+    try {
+      // For now, just delete/cancel the appointment
+      await fetch(`${API}/appointments/${appt.id}/complete`, { method: "PUT", headers: authHeaders() });
+      show("❌ Payment rejected. Appointment cancelled.", "error");
+      setAppointments(prev => prev.filter(a => a.id !== appt.id));
+    } catch (e) {
+      show(e.message, "error");
+    }
+  };
+
+  // When "View Proof" is clicked, open the proof modal instead of directly verifying
+  const handleOpenProof = (appt) => {
+    setProofAppt(appt);
   };
 
   const handleReschedule = async (appt) => {
@@ -2050,9 +2199,9 @@ export default function DoctorDashboard() {
         <style>{`* { box-sizing:border-box; margin:0; padding:0; } ::-webkit-scrollbar{width:5px;} ::-webkit-scrollbar-track{background:${C.bg};} ::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px;} button,select,input,textarea{font-family:inherit;}`}</style>
         <TopBar activeView={activeView} setActiveView={setActiveView} doctor={doctor} onLogout={handleLogout} />
         <div style={{ maxWidth: 1300, margin: "0 auto", padding: "32px 24px" }}>
-          {activeView === "overview"     && <OverviewView appointments={appointments} patients={patients} reports={reports} loadingAppts={loadingAppts} chainStatus={chainStatus} onCompleteAppt={handleCompleteAppt} onReschedule={handleReschedule} setActiveView={setActiveView} doctor={doctor} />}
+          {activeView === "overview"     && <OverviewView appointments={appointments} patients={patients} reports={reports} loadingAppts={loadingAppts} chainStatus={chainStatus} onCompleteAppt={handleCompleteAppt} onReschedule={handleReschedule} onVerifyPayment={handleOpenProof} setActiveView={setActiveView} doctor={doctor} />}
           {activeView === "doctors"      && <DoctorsView allDoctors={allDoctors} />}
-          {activeView === "appointments" && <AppointmentsView appointments={appointments} chainStatus={chainStatus} onCompleteAppt={handleCompleteAppt} onReschedule={handleReschedule} />}
+          {activeView === "appointments" && <AppointmentsView appointments={appointments} chainStatus={chainStatus} onCompleteAppt={handleCompleteAppt} onReschedule={handleReschedule} onVerifyPayment={handleOpenProof} />}
           {activeView === "patients"     && <PatientsView patients={patients} reports={reports} doctor={doctor} onShowToast={show} />}
           {activeView === "queue"        && <QueueView doctor={doctor} />}
           {activeView === "myprofile"    && <MyProfileView doctor={doctor} onUpdateProfile={handleUpdateProfile} licenseVerification={licenseVerification} onLicenseVerify={handleLicenseVerify} onShowToast={show} />}
@@ -2171,6 +2320,14 @@ export default function DoctorDashboard() {
         </div>
       )}
 
+{proofAppt && (
+  <PaymentProofModal
+    appointment={proofAppt}
+    onApprove={handleVerifyPayment}
+    onReject={handleRejectPayment}
+    onClose={() => setProofAppt(null)}
+  />
+)}
       <ToastContainer toasts={toasts} />
     </>
   );

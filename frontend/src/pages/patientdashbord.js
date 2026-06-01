@@ -626,8 +626,25 @@ function PaymentModal({ doctor, time, date, isEmergency, patientId, onClose, onS
   const [queuePos, setQueuePos] = useState(null);
   const baseFee = isEmergency ? Math.round((doctor.fee || 0) * 1.5) : (doctor.fee || 0);
   const [customFee, setCustomFee] = useState(baseFee > 0 ? baseFee : 1);
+  const [screenshotFile, setScreenshotFile] = useState(null);
+  const [screenshotPreview, setScreenshotPreview] = useState("");
+  const [screenshotBase64, setScreenshotBase64] = useState("");
+  const fileInputRef = useRef(null);
 
-  const createAppointment = async (paymentMethod) => {
+  const handleScreenshotSelect = (file) => {
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      alert("Screenshot must be under 5MB");
+      return;
+    }
+    setScreenshotFile(file);
+    setScreenshotPreview(URL.createObjectURL(file));
+    const reader = new FileReader();
+    reader.onload = () => setScreenshotBase64(reader.result);
+    reader.readAsDataURL(file);
+  };
+
+  const createAppointment = async (paymentMethod, screenshotData = "") => {
     try {
       const apptRes = await fetch(`${API}/appointments`, {
         method:  "POST",
@@ -640,19 +657,24 @@ function PaymentModal({ doctor, time, date, isEmergency, patientId, onClose, onS
           type:          "Consultation",
           isEmergency:   !!isEmergency,
           fee:           customFee,
-          feePaid:       true,
+          feePaid:       paymentMethod !== "upi",
           paymentMethod: paymentMethod,
+          paymentScreenshot: screenshotData,
         }),
       });
       const data = await apptRes.json();
-      const newTok = data.id || data.blockchain || `MCT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      if (!apptRes.ok) {
+        throw new Error(data.error || "Failed to create appointment");
+      }
+      
+      const newTok = data.tokenId || data.id || data.blockchain || `MCT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
       setToken(newTok);
       setQueuePos(data.queuePosition || null);
       setStep("done");
     } catch (e) {
       console.error(e);
-      setToken(`MCT-${Math.random().toString(36).substring(2, 8).toUpperCase()}`);
-      setStep("done");
+      alert(e.message || "Failed to submit payment proof. Please try a smaller image.");
+      setStep("payment");
     }
   };
 
@@ -780,11 +802,55 @@ function PaymentModal({ doctor, time, date, isEmergency, patientId, onClose, onS
           <p style={{ color: COLORS.accent, fontSize: 14, fontWeight: 700, fontFamily: "monospace", marginBottom: 24 }}>
             UPI ID: {doctor.upiId}
           </p>
-          <button onClick={() => { setStep("processing"); createAppointment("upi"); }} style={{
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 8, fontWeight: 600 }}>📸 Upload Payment Screenshot (Proof of Payment)</label>
+            {screenshotPreview ? (
+              <div style={{ position: "relative", marginBottom: 10 }}>
+                <img src={screenshotPreview} alt="Payment proof" style={{
+                  width: "100%", maxHeight: 200, objectFit: "contain", borderRadius: 10,
+                  border: `2px solid ${COLORS.green}40`, background: COLORS.bg,
+                }} />
+                <button onClick={() => { setScreenshotFile(null); setScreenshotPreview(""); setScreenshotBase64(""); }} style={{
+                  position: "absolute", top: 6, right: 6, width: 24, height: 24, borderRadius: "50%",
+                  background: COLORS.red, border: "none", color: "#fff", fontSize: 12, cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>✕</button>
+                <p style={{ color: COLORS.green, fontSize: 12, marginTop: 6, textAlign: "center", fontWeight: 600 }}>✅ Screenshot attached: {screenshotFile?.name}</p>
+              </div>
+            ) : (
+              <div
+                onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                style={{
+                  width: "100%", padding: "24px 16px", borderRadius: 12,
+                  border: `2px dashed ${COLORS.accent}40`, background: `${COLORS.accent}08`,
+                  cursor: "pointer", textAlign: "center", transition: "all 0.2s",
+                  boxSizing: "border-box",
+                }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = COLORS.accent; e.currentTarget.style.background = `${COLORS.accent}15`; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = `${COLORS.accent}40`; e.currentTarget.style.background = `${COLORS.accent}08`; }}
+              >
+                <div style={{ fontSize: 28, marginBottom: 6 }}>📤</div>
+                <p style={{ color: COLORS.accent, fontSize: 13, fontWeight: 600 }}>Click to upload payment screenshot</p>
+                <p style={{ color: COLORS.muted, fontSize: 11, marginTop: 4 }}>JPG, PNG or any image • Max 5MB</p>
+              </div>
+            )}
+            <input 
+              type="file" 
+              accept="image/*" 
+              ref={fileInputRef} 
+              style={{ display: "none" }} 
+              onChange={(e) => handleScreenshotSelect(e.target.files[0])} 
+            />
+          </div>
+          <button 
+            disabled={!screenshotBase64}
+            onClick={() => { setStep("processing"); createAppointment("upi", screenshotBase64); }} 
+            style={{
             width: "100%", padding: 14,
-            background: `linear-gradient(135deg, ${COLORS.green}, #059669)`,
-            border: "none", color: "#fff", fontSize: 15, fontWeight: 700, borderRadius: 12, cursor: "pointer",
-          }}>✅ Payment Completed</button>
+            background: screenshotBase64 ? `linear-gradient(135deg, ${COLORS.green}, #059669)` : COLORS.cardBorder,
+            border: "none", color: screenshotBase64 ? "#fff" : COLORS.muted, fontSize: 15, fontWeight: 700, borderRadius: 12, 
+            cursor: screenshotBase64 ? "pointer" : "not-allowed", transition: "all 0.2s"
+          }}>✅ Payment Completed — Submit Proof</button>
           <button onClick={() => setStep("payment")} style={{
             width: "100%", padding: 12, marginTop: 12,
             background: "transparent", border: `1px solid ${COLORS.cardBorder}`, color: COLORS.muted,
@@ -805,17 +871,26 @@ function PaymentModal({ doctor, time, date, isEmergency, patientId, onClose, onS
         borderRadius: 16, width: "100%", maxWidth: 420, overflow: "hidden",
       }}>
         {/* Receipt Header */}
-        <div style={{ background: `linear-gradient(135deg, ${COLORS.green}20, ${COLORS.green}05)`, padding: "32px 24px", textAlign: "center", borderBottom: `2px dashed ${COLORS.cardBorder}` }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>🎉</div>
-          <h2 style={{ color: COLORS.green, fontSize: 20, fontWeight: 800, margin: 0 }}>Booking Confirmed</h2>
+        <div style={{ background: `linear-gradient(135deg, ${method === "upi" ? COLORS.yellow : COLORS.green}20, ${method === "upi" ? COLORS.yellow : COLORS.green}05)`, padding: "32px 24px", textAlign: "center", borderBottom: `2px dashed ${COLORS.cardBorder}` }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>{method === "upi" ? "⏳" : "🎉"}</div>
+          <h2 style={{ color: method === "upi" ? COLORS.yellow : COLORS.green, fontSize: 20, fontWeight: 800, margin: 0 }}>
+            {method === "upi" ? "Pending Doctor Confirmation" : "Booking Confirmed"}
+          </h2>
+          {method === "upi" && (
+            <p style={{ color: COLORS.muted, fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
+              Your payment screenshot has been submitted. The doctor will review and confirm your appointment shortly.
+            </p>
+          )}
         </div>
         
         {/* Receipt Details */}
         <div style={{ padding: "24px 32px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
-            <span style={{ color: COLORS.muted, fontSize: 13 }}>Booking ID</span>
-            <span style={{ color: COLORS.text, fontSize: 14, fontWeight: 700, fontFamily: "monospace" }}>{token.slice(0, 12)}</span>
-          </div>
+          {method !== "upi" && (
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
+              <span style={{ color: COLORS.muted, fontSize: 13 }}>Booking ID</span>
+              <span style={{ color: COLORS.text, fontSize: 14, fontWeight: 700, fontFamily: "monospace" }}>{token.slice(0, 12)}</span>
+            </div>
+          )}
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
             <span style={{ color: COLORS.muted, fontSize: 13 }}>Doctor</span>
             <span style={{ color: COLORS.text, fontSize: 14, fontWeight: 600 }}>Dr. {doctor.name}</span>

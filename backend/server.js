@@ -149,6 +149,8 @@ const appointmentSchema = new mongoose.Schema({
   fee:           { type: Number, default: 0 },
   feePaid:       { type: Boolean, default: false },
   paymentMethod: { type: String, default: "" },
+  transactionId: { type: String, default: "" },
+  paymentScreenshot: { type: String, default: "" },
   tokenId:       { type: String, default: "" },
   blockchain:    { type: String, default: "" },
   notes:         { type: String, default: "" },
@@ -443,8 +445,8 @@ ${reportText}${imageNote}`;
 // ══════════════════════════════════════════════════════════════════════════════
 function startServer() {
   app.use(cors());
-  app.use(express.json({ limit: "10mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
   function randomHex(len = 8) {
     return [...Array(len)].map(() => Math.floor(Math.random() * 16).toString(16)).join("").toUpperCase();
@@ -1144,7 +1146,7 @@ function startServer() {
 
   app.post("/api/appointments", protect, async (req, res) => {
     try {
-      const { patientId, doctorId, doctorName, dept, specialty, date, time, isEmergency, type, fee, feePaid, paymentMethod } = req.body;
+      const { patientId, doctorId, doctorName, dept, specialty, date, time, isEmergency, type, fee, feePaid, paymentMethod, transactionId, paymentScreenshot } = req.body;
       if (!date || !time)  return res.status(400).json({ error: "date and time are required" });
       if (!patientId)      return res.status(400).json({ error: "patientId is required" });
       
@@ -1152,29 +1154,33 @@ function startServer() {
       const todayStr = new Date().toISOString().slice(0, 10);
       if (date < todayStr) return res.status(400).json({ error: "Cannot book appointments in the past" });
 
-      // Duplicate prevention
+      // Duplicate prevention (prevent booking same doctor at the exact same time)
       const existing = await Appointment.findOne({ 
-        patientId, doctorId, date, status: { $in: ["confirmed", "pending", "in-progress"] } 
+        patientId, doctorId, date, time, status: { $in: ["confirmed", "pending", "in-progress"] } 
       }).lean();
-      if (existing) return res.status(400).json({ error: "You already have an appointment booked with this doctor on this date" });
+      if (existing) return res.status(400).json({ error: "You already have an appointment booked with this doctor at this specific time" });
 
       const patientUser = await User.findOne({ patientId }).lean();
       const doctorUser  = doctorId ? await User.findById(doctorId).lean() : null;
       const tokenId     = `APT-${randomHex(8)}`;
+      
+      // If direct UPI, we set status to pending and save the transaction ID.
+      const initialStatus = paymentMethod === "upi" ? "pending" : "confirmed";
+
       const appt = await Appointment.create({
         patientId, patientName: patientUser?.name || "",
         doctorId: doctorId || "", doctorName: doctorName || doctorUser?.name || "",
         dept: dept || doctorUser?.specialty || "General",
         specialty: specialty || doctorUser?.specialty || "",
-        date, time, tokenId, isEmergency: !!isEmergency, status: "confirmed",
-        fee: fee || doctorUser?.fee || 0, feePaid: !!feePaid,
-        paymentMethod: paymentMethod || "", type: type || "Consultation",
+        date, time, tokenId, isEmergency: !!isEmergency, status: initialStatus,
+        fee: fee || doctorUser?.fee || 0, feePaid: paymentMethod === "upi" ? false : !!feePaid,
+        paymentMethod: paymentMethod || "", transactionId: transactionId || "", paymentScreenshot: paymentScreenshot || "", type: type || "Consultation",
         age: patientUser?.age, gender: patientUser?.gender || "",
         phone: patientUser?.phone || "", blockchain: tokenId,
       });
 
-      // Auto-add to queue if appointment is for today
-      if (date === todayStr && doctorId) {
+      // Auto-add to queue if appointment is for today and confirmed
+      if (date === todayStr && doctorId && initialStatus === "confirmed") {
         const key = _qkey(doctorId, date);
         if (!_queueMap.has(key)) _queueMap.set(key, []);
         const queue = _queueMap.get(key);
@@ -1208,6 +1214,48 @@ function startServer() {
         tokenId, blockchain: tokenId,
       });
     } catch (err) { console.error("appt create error:", err); res.status(500).json({ error: err.message }); }
+  });
+
+  app.put("/api/appointments/:id/verify-payment", protect, async (req, res) => {
+    try {
+      const apptId = req.params.id;
+      const appt = await Appointment.findByIdAndUpdate(apptId, {
+        status: "confirmed",
+        feePaid: true,
+      }, { new: true });
+      if (!appt) return res.status(404).json({ error: "Appointment not found" });
+
+      const todayStr = new Date().toISOString().slice(0, 10);
+      if (appt.date === todayStr && appt.doctorId) {
+        const key = _qkey(appt.doctorId, appt.date);
+        if (!_queueMap.has(key)) _queueMap.set(key, []);
+        const queue = _queueMap.get(key);
+        const exists = queue.find(q => q.appointmentId === String(appt._id));
+        if (!exists) {
+          const queueToken    = `Q-${randomHex(4)}-${(queue.length + 1).toString().padStart(3, "0")}`;
+          const queuePosition = queue.length + 1;
+          queue.push({
+            appointmentId: String(appt._id),
+            patientId:     appt.patientId,
+            time:          appt.time,
+            done:          false,
+            patientArrived: false,
+            checkedInAt:   null,
+            queueToken,
+            queuePosition,
+            notified7:     false,
+            notifiedNext:  false,
+            notified30min: false,
+          });
+
+          await Appointment.findByIdAndUpdate(appt._id, {
+            queuePosition,
+          }).catch(() => {});
+        }
+      }
+
+      res.json({ message: "Payment verified", appointment: { ...appt.toObject(), id: String(appt._id) } });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   app.put("/api/appointments/:id/complete", protect, async (req, res) => {
