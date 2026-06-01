@@ -1,4 +1,4 @@
-<![CDATA[# 🏥 MediChain — Blockchain-Powered Healthcare Platform
+# 🏥 MediChain — Blockchain-Powered Healthcare Platform
 
 <div align="center">
 
@@ -53,7 +53,7 @@
 | Role | Capabilities |
 |------|-------------|
 | **Patient** | View own records, book appointments, upload reports, blockchain verification, AI report analysis, SOS emergency, nearby doctors, queue check-in |
-| **Doctor** | Manage patient queue, submit/upload reports for patients, clear/sign-off records, set clinic location & availability, manage profile |
+| **Doctor** | Manage patient queue, submit reports for patients, clear/sign-off records, set clinic location & availability, manage profile |
 
 ### 🔔 Real-Time Notifications
 - **Browser Push Notifications** — Notifications API for queue updates, treatment completion, and appointment reminders
@@ -225,12 +225,12 @@ All schemas are defined inline in `server.js`:
 
 | Model | Key Fields | Purpose |
 |-------|------------|---------|
-| **User** | name, email, passwordHash, role (patient/doctor/admin), patientId (`HLT-0xXXXXXX`), walletAddress, specialty, licenseNumber, fee, rating, availability, location{lat,lng}, upiId | Users with role-specific fields |
+| **User** | name, email, passwordHash, role (patient/doctor/admin), patientId (`HLT-0xXXXXXX`), walletAddress, specialty, licenseNumber, fee, rating, availability, location | Users with role-specific fields |
 | **MedicalRecord** | patientId, fileName, category, fileHash, blockchainTx, ipfsCid, ipfsUrl, anchoredOnChain, aiSummary, doctorComment, cleared, clearanceTx | Medical records with blockchain + IPFS |
 | **Appointment** | patientId, doctorId, dept, date, time, status, fee, paymentMethod, tokenId, queuePosition, checkedIn, treatmentDuration | Appointments with queue tracking |
 | **LicenceVerification** | email, licenseNumber, documentHash, status, councilName, specialization, verificationMethod | Doctor license verification records |
-| **Notification** | patientId, type (queue_update/treatment_complete/appointment_reminder/doctor_report/no_show), title, message, read | Push notifications |
-| **EmergencyAlert** | patientId, patientName, phone, bloodGroup, location{lat,lng}, status, acknowledgedBy, nearbyHospitals[] | SOS emergency alerts |
+| **Notification** | patientId, type, title, message, read | Push notifications |
+| **EmergencyAlert** | patientId, patientName, phone, bloodGroup, location, status, acknowledgedBy, nearbyHospitals | SOS emergency alerts |
 
 ---
 
@@ -336,7 +336,7 @@ The frontend runs on `http://localhost:3000` by default.
 | `POST` | `/api/appointments` | Yes | Book new appointment (with duplicate prevention) |
 | `GET` | `/api/appointments/patient` | Yes | Get current user's appointments |
 | `GET` | `/api/appointments` | Yes | Get all or filtered appointments |
-| `PUT` | `/api/appointments/:id/verify-payment` | Yes | Verify UPI payment & confirm appointment |
+| `PUT` | `/api/appointments/:id/verify-payment` | Yes | Verify UPI payment and confirm appointment |
 | `PUT` | `/api/appointments/:id/complete` | Yes | Mark appointment completed (mints NFT) |
 | `PUT` | `/api/appointments/:id/reschedule` | Yes | Request reschedule |
 
@@ -353,7 +353,7 @@ The frontend runs on `http://localhost:3000` by default.
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | `POST` | `/api/payment/create-order` | Yes | Create payment order (HMAC-signed) |
-| `POST` | `/api/payment/verify` | Yes | Verify payment & create appointment |
+| `POST` | `/api/payment/verify` | Yes | Verify payment and create appointment |
 
 ### Doctors
 | Method | Endpoint | Auth | Description |
@@ -386,7 +386,7 @@ The frontend runs on `http://localhost:3000` by default.
 | `GET` | `/api/verification/lookup` | No | Public lookup by license number, email, or name |
 | `GET` | `/api/verification/status/:doctorId` | No | Quick verification status for a doctor |
 
-### AI & Analysis
+### AI and Analysis
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | `POST` | `/api/analyze-report` | No | AI medical report analysis (Groq LLaMA 3.3 70B) |
@@ -526,4 +526,3 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 - **[Tushar Parihar](https://github.com/Tusharparihar05)**
 - **Priyanshu Kumar**
-]]>
