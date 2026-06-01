@@ -525,4 +525,4 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 ## 👨‍💻 Authors
 
 - **[Tushar Parihar](https://github.com/Tusharparihar05)**
-- **Priyanshu Kumar**
+- **[Priyanshu Kumar](https://github.com/Priyanshu12131)**
